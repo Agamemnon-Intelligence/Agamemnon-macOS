@@ -1,21 +1,42 @@
-# macOS
+# ---- macOS ----
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
 
-# Xcode
-build/
-DerivedData/
-*.xcuserstate
+# ---- Xcode (the project is generated from project.yml by XcodeGen) ----
+Agamemnon.xcodeproj/
+*.xcworkspace/
 xcuserdata/
+*.xcuserstate
 *.xcscmblueprint
 *.xccheckout
+DerivedData/
+build/
+*.dSYM
+*.dSYM.zip
 
-# Swift Package Manager
+# ---- Swift Package Manager ----
 .build/
 .swiftpm/
-Package.resolved
 
-# Archives and release output
-*.xcarchive
+# ---- Build outputs ----
 *.dmg
-*.ipa
+*.xcarchive
 dist/
+
+# ---- Signing material & secrets: never commit these ----
+*.p12
+*.cer
+*.certSigningRequest
+*.provisionprofile
+*.pem
+*.key
+.env
+.env.*
+
+# ---- Editors ----
+.idea/
+.vscode/
+*.swp
+*~

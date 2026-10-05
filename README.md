@@ -1,25 +1,75 @@
-# Agamemnon
+<p align="center">
+  <img src="docs/icon.png" width="160" alt="Agamemnon icon">
+</p>
 
-Free, open-source antivirus for macOS.
+<h1 align="center">Agamemnon</h1>
 
-Agamemnon protects your Mac in four ways:
+<p align="center">Free, open-source antivirus for macOS.</p>
 
-- **Encrypted DNS** – pick a private DNS provider (Cloudflare, Quad9, Mullvad or AdGuard) and turn it on from the app. Some providers also block known malware and phishing sites.
-- **Malware scanning** – quick, full, custom and scheduled scans. Suspicious files go into a quarantine vault, where they can be restored.
-- **Archive and installer scanning** – looks inside ZIP, RAR, 7Z, DMG, PKG, ISO and other files before you open them, so threats can't hide inside.
-- **Download protection** – new downloads are checked automatically, and anything dangerous is quarantined before you can open it.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv2-blue" alt="GPLv2"></a>
+  <img src="https://img.shields.io/badge/macOS-13%2B-0b1430" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/Apple%20silicon%20%26%20Intel-universal-1b3474" alt="Universal">
+</p>
 
-Agamemnon also warns you when something on your Mac asks for administrator access, and shows its status in the menu bar.
+## What it does
 
-## Download
-
-Agamemnon ships as a signed DMG. Releases will be published on the Releases page.
+- **Encrypted DNS.** Choose Cloudflare, Quad9, Mullvad or AdGuard and turn on DNS-over-HTTPS for the whole Mac. The malware-blocking options also stop known malware and phishing sites.
+- **Malware scanning.** Quick, Full, Custom (drag and drop) and scheduled scans. Threats go into a quarantine vault, where you can restore them or delete them for good.
+- **Archive and installer scanning.** Looks inside ZIP, RAR, 7Z, TAR, ISO, XAR, DMG and PKG files, up to 3 levels deep, so threats can't hide inside. There are limits to protect against zip bombs.
+- **Download protection.** New files in Downloads (and any other folders you add) are checked as soon as the download finishes. Dangerous files are quarantined, and apps Apple hasn't notarized are flagged.
+- **Administrator access alerts.** Warns you when an app asks for your admin password.
+- **Background item alerts.** Warns you when something installs a LaunchAgent or LaunchDaemon so it starts automatically, then scans it.
+- **Menu bar status icon**, dark midnight theme, and a Credits page.
 
 A Windows version is in development.
+
+## How detection works
+
+| Engine | What it checks |
+| --- | --- |
+| Agamemnon | SHA-256 of every file against the [MalwareBazaar](https://bazaar.abuse.ch) list of more than 1 million known-malware hashes (downloaded on first launch and updated twice a day), plus the EICAR test file. |
+| Gatekeeper | Asks macOS whether downloaded apps and installers are signed and notarized. Revoked developer certificates count as malware. |
+| ClamAV *(optional)* | If you `brew install clamav`, Agamemnon keeps its own ClamAV signatures up to date and runs `clamscan` as a second opinion. |
+
+Archives are opened with tools that ship with macOS (`bsdtar`, `hdiutil`, `pkgutil`), in a private temporary folder. Disk images are mounted read-only and hidden from Finder.
+
+## Install
+
+Download `Agamemnon.dmg` from [Releases](../../releases), open it and drag Agamemnon to Applications.
+
+Builds without a Developer ID signature are ad-hoc signed. The first time you open one, macOS blocks it. Go to **System Settings › Privacy & Security** and click **Open Anyway**.
+
+For full scans, give Agamemnon **Full Disk Access** in System Settings › Privacy & Security.
+
+## Build
+
+The Xcode project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen):
+
+```sh
+brew install xcodegen
+xcodegen generate
+open Agamemnon.xcodeproj
+```
+
+GitHub Actions builds a universal app and DMG on every push (`.github/workflows/build.yml`) and publishes it as the **Nightly build** release. To ship a signed and notarized DMG, add these repository secrets:
+
+- `DEVELOPER_ID_P12`: your Developer ID Application certificate, as a base64-encoded .p12
+- `DEVELOPER_ID_P12_PASSWORD`: the password for that .p12
+- `APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD`: for notarization
+
+## Limits
+
+- Download protection reacts within about 2 seconds of a download finishing. Blocking a file *before* any app can open it needs Apple's Endpoint Security entitlement, which this build doesn't have.
+- Encrypted DNS uses a configuration profile, so macOS asks you to approve it in System Settings.
+- Admin access alerts read the system log, which needs an administrator account.
+- No antivirus catches everything. Keep macOS updated and only install software you trust.
 
 ## Credits
 
 Created by [mirazbakis](https://github.com/mirazbakis) and [mertyesileducation](https://github.com/mertyesileducation).
+
+Malware hashes come from MalwareBazaar by abuse.ch. The optional second engine is ClamAV by Cisco Talos. The emblem is built around *The Sacrifice of Iphigenia* by Giovanni Battista Tiepolo, which is in the public domain.
 
 ## License
 
