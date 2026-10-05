@@ -62,6 +62,8 @@ struct OverviewView: View {
                     .scaledToFit()
                     .frame(width: 128, height: 128)
                     .shadow(color: Theme.gold.opacity(0.25), radius: 18)
+                    .padding(8)
+                    .liquidGlass(Circle(), tint: Theme.gold.opacity(0.10))
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
                         Image(systemName: model.status.symbol)

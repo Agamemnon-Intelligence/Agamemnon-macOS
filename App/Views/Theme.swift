@@ -61,23 +61,42 @@ struct NavyButtonStyle: ButtonStyle {
         @Environment(\.isEnabled) private var isEnabled
 
         var body: some View {
-            configuration.label
+            let shape = RoundedRectangle(cornerRadius: compact ? 9 : 11, style: .continuous)
+            let label = configuration.label
                 .font(.system(size: compact ? 12 : 13, weight: .semibold))
                 .foregroundStyle(foreground)
                 .padding(.horizontal, compact ? 12 : 16)
                 .padding(.vertical, compact ? 6 : 9)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(fill)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(border, lineWidth: 1)
-                )
-                .opacity(isEnabled ? 1 : 0.45)
-                .contentShape(Rectangle())
-                .onHover { hovering = $0 }
-                .animation(.easeOut(duration: 0.12), value: hovering)
+
+            Group {
+                if #available(macOS 26.0, *) {
+                    // Liquid Glass: navy-tinted for primary buttons, clear glass otherwise.
+                    label
+                        .glassEffect(glass, in: shape)
+                        .scaleEffect(configuration.isPressed ? 0.97 : 1)
+                } else {
+                    label
+                        .background(shape.fill(fill))
+                        .overlay(shape.strokeBorder(border, lineWidth: 1))
+                }
+            }
+            .opacity(isEnabled ? 1 : 0.45)
+            .contentShape(shape)
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+        }
+
+        @available(macOS 26.0, *)
+        private var glass: Glass {
+            switch kind {
+            case .primary:
+                return Glass.regular.tint(hovering ? Theme.navyHover : Theme.navy).interactive()
+            case .secondary:
+                return Glass.regular.interactive()
+            case .destructive:
+                return Glass.regular.tint(Theme.danger.opacity(0.18)).interactive()
+            }
         }
 
         private var foreground: Color {
@@ -120,20 +139,77 @@ extension ButtonStyle where Self == NavyButtonStyle {
 
 struct Card<Content: View>: View {
     var padding: CGFloat = 18
+    var tint: Color? = nil
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         content()
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Theme.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Theme.stroke, lineWidth: 1)
-            )
+            .liquidGlass(RoundedRectangle(cornerRadius: 18, style: .continuous), tint: tint)
+    }
+}
+
+// MARK: - Liquid Glass
+
+extension View {
+    /// Liquid Glass on macOS 26 and later; a frosted navy panel on older macOS.
+    @ViewBuilder
+    func liquidGlass<S: Shape>(_ shape: S, tint: Color? = nil, interactive: Bool = false) -> some View {
+        if #available(macOS 26.0, *) {
+            self.glassEffect(Theme.glass(tint: tint, interactive: interactive), in: shape)
+        } else {
+            self
+                .background(shape.fill(Theme.card.opacity(0.72)))
+                .background(shape.fill(.ultraThinMaterial))
+                .overlay(shape.stroke(Theme.stroke, lineWidth: 1))
+        }
+    }
+
+    /// Groups nearby glass shapes so they blend and morph together (macOS 26+).
+    @ViewBuilder
+    func glassGroup(spacing: CGFloat = 16) -> some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) { self }
+        } else {
+            self
+        }
+    }
+}
+
+extension Theme {
+    @available(macOS 26.0, *)
+    static func glass(tint: Color?, interactive: Bool) -> Glass {
+        var glass = Glass.regular
+        if let tint { glass = glass.tint(tint) }
+        if interactive { glass = glass.interactive() }
+        return glass
+    }
+}
+
+/// Soft midnight glows behind the content, so the glass has something to refract.
+struct AuroraBackground: View {
+    var body: some View {
+        ZStack {
+            Theme.background
+            Circle()
+                .fill(Theme.navyHover.opacity(0.55))
+                .frame(width: 520, height: 520)
+                .blur(radius: 140)
+                .offset(x: -260, y: -240)
+            Circle()
+                .fill(Theme.accent.opacity(0.22))
+                .frame(width: 420, height: 420)
+                .blur(radius: 150)
+                .offset(x: 320, y: 60)
+            Circle()
+                .fill(Theme.gold.opacity(0.10))
+                .frame(width: 380, height: 380)
+                .blur(radius: 160)
+                .offset(x: -40, y: 380)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 }
 
@@ -239,8 +315,7 @@ struct Notice: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(color.opacity(0.10)))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(color.opacity(0.25)))
+        .liquidGlass(RoundedRectangle(cornerRadius: 12, style: .continuous), tint: color.opacity(0.14))
     }
 }
 
@@ -258,7 +333,6 @@ struct Page<Content: View>: View {
             .frame(maxWidth: .infinity)
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.background)
     }
 }
 

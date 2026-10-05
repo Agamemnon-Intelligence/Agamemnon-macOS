@@ -64,7 +64,7 @@ struct MenuBarView: View {
         }
         .padding(16)
         .frame(width: 320)
-        .background(Theme.midnightHigh)
+        .background(AuroraBackground())
     }
 
     private var statusColor: Color {

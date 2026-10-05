@@ -44,15 +44,16 @@ struct ContentView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Floating Liquid Glass sidebar over the midnight aurora.
             Sidebar()
-                .frame(width: 228)
-            Rectangle()
-                .fill(Theme.stroke)
-                .frame(width: 1)
+                .frame(width: 232)
+                .liquidGlass(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .padding(.leading, 10)
+                .padding(.vertical, 10)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Theme.midnight)
+        .background(AuroraBackground())
         .ignoresSafeArea()
     }
 
@@ -76,6 +77,7 @@ struct Sidebar: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var vault: QuarantineVault
     @EnvironmentObject private var scanner: ScanController
+    @Namespace private var selectionNamespace
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -94,18 +96,22 @@ struct Sidebar: View {
                 }
             }
             .padding(.horizontal, 18)
-            .padding(.top, 46)
+            .padding(.top, 40)
             .padding(.bottom, 22)
 
             VStack(spacing: 2) {
                 ForEach(AppSection.allCases) { section in
                     SidebarItem(section: section,
                                 selected: nav.section == section,
-                                badge: badge(for: section)) {
-                        nav.section = section
+                                badge: badge(for: section),
+                                namespace: selectionNamespace) {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                            nav.section = section
+                        }
                     }
                 }
             }
+            .glassGroup(spacing: 6)
             .padding(.horizontal, 10)
 
             Spacer()
@@ -119,7 +125,6 @@ struct Sidebar: View {
             .padding(18)
         }
         .frame(maxHeight: .infinity)
-        .background(Theme.sidebar)
     }
 
     private var statusLine: String {
@@ -155,6 +160,7 @@ private struct SidebarItem: View {
     let section: AppSection
     let selected: Bool
     let badge: String?
+    let namespace: Namespace.ID
     let action: () -> Void
     @State private var hovering = false
 
@@ -180,10 +186,18 @@ private struct SidebarItem: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(selected ? Theme.navy.opacity(0.55) : (hovering ? Theme.card : Color.clear))
-            )
+            .background {
+                if selected {
+                    // A navy glass pill that slides between items.
+                    Color.clear
+                        .liquidGlass(RoundedRectangle(cornerRadius: 11, style: .continuous),
+                                     tint: Theme.navy.opacity(0.85), interactive: true)
+                        .matchedGeometryEffect(id: "selection", in: namespace)
+                } else if hovering {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

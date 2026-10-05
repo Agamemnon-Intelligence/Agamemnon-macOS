@@ -54,7 +54,7 @@ struct AboutView: View {
                         .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 16) {
-                        Link("Source code", destination: URL(string: "https://github.com/mirazbakis/Agamemnon")!)
+                        Link("Source code", destination: URL(string: "https://github.com/Agamemnon-Intelligence/Agamemnon-macOS")!)
                         Link("GNU GPL v2", destination: URL(string: "https://www.gnu.org/licenses/old-licenses/gpl-2.0.html")!)
                     }
                     .font(.system(size: 12))
