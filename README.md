@@ -10,6 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv2-blue" alt="GPLv2"></a>
   <img src="https://img.shields.io/badge/macOS-13%2B-0b1430" alt="macOS 13+">
   <img src="https://img.shields.io/badge/Apple%20silicon%20%26%20Intel-universal-1b3474" alt="Universal">
+  <a href="https://github.com/Agamemnon-Intelligence/Agamemnon-windows"><img src="https://img.shields.io/badge/Windows-in%20development-0078D4" alt="Windows version"></a>
 </p>
 
 ## What it does
@@ -22,7 +23,7 @@
 - **Background item alerts.** Warns you when something installs a LaunchAgent or LaunchDaemon so it starts automatically, then scans it.
 - **Menu bar status icon**, dark midnight theme, and a Credits page.
 
-A Windows version is in development.
+A Windows version is in development. See [Agamemnon for Windows](#agamemnon-for-windows).
 
 ## How detection works
 
@@ -64,6 +65,12 @@ GitHub Actions builds a universal app and DMG on every push (`.github/workflows/
 - Encrypted DNS uses a configuration profile, so macOS asks you to approve it in System Settings.
 - Admin access alerts read the system log, which needs an administrator account.
 - No antivirus catches everything. Keep macOS updated and only install software you trust.
+
+## Agamemnon for Windows
+
+The Windows build lives in its own repository: **[Agamemnon-Intelligence/Agamemnon-windows](https://github.com/Agamemnon-Intelligence/Agamemnon-windows)**.
+
+It's still in development. Downloads, build instructions and issues for the Windows version are in that repository.
 
 ## Credits
 
