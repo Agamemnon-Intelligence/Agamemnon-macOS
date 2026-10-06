@@ -23,7 +23,7 @@
 - **Background item alerts.** Warns you when something installs a LaunchAgent or LaunchDaemon so it starts automatically, then scans it.
 - **Menu bar status icon**, dark midnight theme, and a Credits page.
 
-A Windows version is in development. See [Agamemnon for Windows](#agamemnon-for-windows).
+A Windows version also exists and is in active development. See [Agamemnon for Windows](#agamemnon-for-windows).
 
 ## How detection works
 
@@ -84,4 +84,4 @@ Malware hashes come from MalwareBazaar by abuse.ch. The optional second engine i
 
 Agamemnon is free software, released under the [GNU General Public License v2.0](LICENSE).
 
-Copyright (C) 2026 mirazbakis and mertyesileducation
+**Copyright (C) 2026 mirazbakis and mertyesileducation**
