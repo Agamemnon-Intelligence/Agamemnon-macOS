@@ -27,6 +27,8 @@ A Windows version is in development. See [Agamemnon for Windows](#agamemnon-for-
 
 ## How detection works
 
+For the full details (scans, quarantine, real-time protection, DNS, privacy and limits), see **[HOW_IT_WORKS.md](HOW_IT_WORKS.md)**.
+
 | Engine | What it checks |
 | --- | --- |
 | Agamemnon | SHA-256 of every file against the [MalwareBazaar](https://bazaar.abuse.ch) list of more than 1 million known-malware hashes (downloaded on first launch and updated twice a day), plus the EICAR test file. |
