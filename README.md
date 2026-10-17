@@ -4,61 +4,93 @@
 
 <h1 align="center">Agamemnon</h1>
 
-<p align="center">Free, open-source antivirus for macOS.</p>
+<p align="center"><b>Free, open-source antivirus for macOS.</b><br>
+Behaviour protection, pattern rules, a ransomware shield and 43 million known-malware fingerprints, in one quiet menu bar app.</p>
 
 <p align="center">
+  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Agamemnon-Intelligence/Agamemnon-macOS?label=release&color=1b3474" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv2-blue" alt="GPLv2"></a>
   <img src="https://img.shields.io/badge/macOS-13%2B-0b1430" alt="macOS 13+">
   <img src="https://img.shields.io/badge/Apple%20silicon%20%26%20Intel-universal-1b3474" alt="Universal">
-  <a href="https://github.com/Agamemnon-Intelligence/Agamemnon-windows"><img src="https://img.shields.io/badge/Windows-in%20development-0078D4" alt="Windows version"></a>
+  <a href="https://github.com/Agamemnon-Intelligence/Agamemnon-windows"><img src="https://img.shields.io/badge/also%20on-Windows-0078D4" alt="Windows version"></a>
 </p>
+
+<p align="center">
+  <a href="../../releases/latest"><b>Download</b></a> ·
+  <a href="HOW_IT_WORKS.md"><b>How it works</b></a> ·
+  <a href="https://athenesoftworks.com"><b>Website</b></a> ·
+  <a href="https://github.com/Agamemnon-Intelligence/Agamemnon-windows"><b>Windows version</b></a>
+</p>
+
+---
 
 ## What it does
 
-- **Encrypted DNS.** Choose Cloudflare, Quad9, Mullvad or AdGuard and turn on DNS-over-HTTPS for the whole Mac. The malware-blocking options also stop known malware and phishing sites.
-- **Malware scanning.** Quick, Full, Custom (drag and drop) and scheduled scans. Threats go into a quarantine vault, where you can restore them or delete them for good.
-- **Archive and installer scanning.** Looks inside ZIP, RAR, 7Z, TAR, ISO, XAR, DMG and PKG files, up to 3 levels deep, so threats can't hide inside. There are limits to protect against zip bombs.
-- **Download protection.** New files in Downloads (and any other folders you add) are checked as soon as the download finishes. Dangerous files are quarantined, and apps Apple hasn't notarized are flagged.
-- **Administrator access alerts.** Warns you when an app asks for your admin password.
-- **Background item alerts.** Warns you when something installs a LaunchAgent or LaunchDaemon so it starts automatically, then scans it.
-- **Behaviour protection.** Stops Mac stealers, backdoors and miners as they run: fake password prompts, keychain, wallet and browser-data theft, secret screenshots, switching off macOS's download check, and downloads from known malware sites.
-- **Pattern rules.** Recognises Mac malware families (AMOS, Banshee, Cuckoo, Poseidon, SysJoker, Shlayer, BeaverTail, miners…) by their code, so new builds are caught before anyone has listed them.
-- **VirusShare hashes.** About 42 million extra malware fingerprints from VirusShare.com, downloaded in the background and checked in the same pass.
-- **Malware site list.** Downloads are checked against URLhaus by abuse.ch, a live list of links spreading malware.
-- **Ransomware shield.** Watches Documents, Desktop and Pictures for files being scrambled, then stops the program doing it.
-- **Browser protection.** Finds adware extensions, search-engine hijacks and profiles that take over Safari, Chrome, Brave, Edge, Firefox and others.
-- **Startup items check** of everything that starts with your Mac, and a **Security Checkup** of FileVault, firewall, Gatekeeper, updates and backups.
-- **ClamAV built in.** Agamemnon installs Cisco's free ClamAV engine for you as a second opinion.
-- **Menu bar status icon**, dark midnight theme, and a Credits page.
+### Real-time protection
 
-A Windows version also exists and is in active development. See [Agamemnon for Windows](#agamemnon-for-windows).
+- **Behaviour protection.** Watches every new program and stops stealers, backdoors and miners as they run: fake password prompts, keychain, crypto-wallet and browser-data theft, secret screenshots, switching off macOS's download check, and downloads from known malware sites. Written against the families hitting Macs today: AMOS, Banshee, Cuckoo, Poseidon, FrigidStealer, SysJoker and others.
+- **Ransomware shield.** Watches Documents, Desktop and Pictures (and any folders you add). If files suddenly start getting scrambled, it stops the unsigned program doing it and moves it to quarantine.
+- **Download protection.** Every new download is checked as soon as it finishes, including inside archives and disk images, and against where it came from. Dangerous files go straight to quarantine.
+- **Browser protection.** Finds adware extensions, search-engine hijacks and profiles that take over Safari, Chrome, Brave, Edge, Firefox, Arc, Opera or Vivaldi, with one-click removal.
+- **Startup and admin alerts.** Warns you when something sets itself up to start automatically or asks for your administrator password, and regularly checks everything that already starts with your Mac.
+
+### Scanning
+
+- **Quick, Full, Custom and scheduled scans.** Drag and drop files or folders, or start a scan from the menu bar.
+- **No hiding in archives.** Looks inside ZIP, RAR, 7Z, TAR, ISO, XAR, DMG and PKG files, up to 3 levels deep. Zip bombs are refused before anything is unpacked.
+- **Quarantine vault.** Threats are moved, never deleted. Restore them or delete them for good: it's your call.
+
+### Privacy and hardening
+
+- **Encrypted DNS.** Cloudflare, Quad9, Mullvad or AdGuard over DNS-over-HTTPS for the whole Mac, with malware-blocking options.
+- **Security Checkup.** FileVault, firewall, Gatekeeper, System Integrity Protection, automatic security updates, Remote Login and Time Machine, each with a button to the right setting.
 
 ## How detection works
 
-For the full details (scans, quarantine, real-time protection, DNS, privacy and limits), see **[HOW_IT_WORKS.md](HOW_IT_WORKS.md)**.
+A file only has to fail one check. Full details, including every rule and its limits, are in **[HOW_IT_WORKS.md](HOW_IT_WORKS.md)**.
 
 | Engine | What it checks |
 | --- | --- |
-| Agamemnon | SHA-256 of every file against the [MalwareBazaar](https://bazaar.abuse.ch) list of more than 1 million known-malware hashes (downloaded on first launch and updated twice a day), plus the EICAR test file. |
-| VirusShare | MD5 of every file (worked out in the same pass) against [VirusShare](https://virusshare.com/hashes)'s ~42 million malware hashes. |
-| Gatekeeper | Asks macOS whether downloaded apps and installers are signed and notarized. Revoked developer certificates count as malware. |
-| Pattern rules | Tell-tale code and strings of Mac malware families in scripts and unsigned programs. |
-| URLhaus | Where a download came from, against [URLhaus](https://urlhaus.abuse.ch)'s live list of malware links. |
-| ClamAV | Installed for you (Homebrew, or Cisco's signed installer). Agamemnon keeps its own ClamAV signatures up to date and runs `clamscan` as a second opinion. |
+| **MalwareBazaar** | SHA-256 of every file against more than 1.1 million confirmed malware samples from [MalwareBazaar](https://bazaar.abuse.ch) (abuse.ch), updated twice a day. |
+| **VirusShare** | MD5 of Mac programs (and, as a warning, installers and archives) against [VirusShare](https://virusshare.com/hashes)'s ~42.5 million malware hashes. Worked out in the same pass, so files are only read once. |
+| **Pattern rules** | Tell-tale code and strings of Mac malware families in scripts and unsigned programs, so new builds are caught before anyone has listed them. |
+| **Behaviour rules** | What a program does once it runs: about two dozen narrow rules for stealers, spyware, backdoors and miners. |
+| **URLhaus** | Where a download came from, against [URLhaus](https://urlhaus.abuse.ch)'s live list of malware links (abuse.ch). |
+| **ClamAV** | Cisco's free engine as a second opinion. Agamemnon installs it for you and keeps its own signatures up to date. |
+| **Gatekeeper** | Whether downloaded apps and installers are signed and notarized. Revoked developer certificates count as malware. |
 
-Archives are opened with tools that ship with macOS (`bsdtar`, `hdiutil`, `pkgutil`), in a private temporary folder. Disk images are mounted read-only and hidden from Finder.
+Agamemnon is careful not to cry wolf. It never stops or quarantines anything that's part of macOS or signed by a known developer on its own, and its rules were checked against more than 1.5 million files on an everyday Mac without a false alarm.
 
 ## Install
 
-Download `Agamemnon.dmg` from [Releases](../../releases), open it and drag Agamemnon to Applications.
+1. Download **`Agamemnon.dmg`** from the [latest release](../../releases/latest). The [Nightly build](../../releases/tag/nightly) has the newest changes from `main`.
+2. Open it and drag **Agamemnon** to **Applications**.
+3. The first time you open it, macOS may block it because this build is ad-hoc signed. Go to **System Settings › Privacy & Security** and click **Open Anyway**.
+4. For full scans, give Agamemnon **Full Disk Access** in System Settings › Privacy & Security.
 
-Builds without a Developer ID signature are ad-hoc signed. The first time you open one, macOS blocks it. Go to **System Settings › Privacy & Security** and click **Open Anyway**.
+**On first launch** Agamemnon downloads its malware lists in the background: MalwareBazaar (about 45 MB), URLhaus (about 3 MB) and VirusShare (about 1.4 GB, picked up again if interrupted). It also installs ClamAV, through Homebrew if you have it, otherwise with Cisco's signed installer after one password prompt. Altogether it uses about 1 GB of disk space. You can turn VirusShare and ClamAV off in Settings.
 
-For full scans, give Agamemnon **Full Disk Access** in System Settings › Privacy & Security.
+## Privacy
+
+- **No account, no telemetry, no uploads.** Your files never leave your Mac. Only fingerprints are compared, against lists stored on your Mac.
+- **Network use** is limited to downloading the malware lists above, ClamAV and its signatures, and the creators' profile pictures on the About page.
+- **Not sandboxed.** An antivirus has to read the whole disk and run system tools, which Apple's App Sandbox doesn't allow. The app runs with Hardened Runtime.
+
+## Limits
+
+No antivirus catches everything. Agamemnon is honest about what it can't do:
+
+- **It reacts just after things start, not before.** Behaviour protection, download protection and the ransomware shield act within a second or two. Blocking a file or program *before* it runs needs Apple's Endpoint Security entitlement, which this build doesn't have. Keep a Time Machine backup.
+- **Known-malware lists only know what's been reported.** Pattern rules, behaviour rules and ClamAV catch many new builds, but brand-new or heavily disguised malware can still get past.
+- **Signed malware** is only caught by hash, ClamAV or behaviour until Apple revokes its certificate.
+- **Files that are only in iCloud Drive** (not downloaded to the Mac) are skipped until they're downloaded.
+- **Encrypted DNS** needs your approval in System Settings, and **admin alerts** need an administrator account.
+
+Keep macOS up to date and only install software you trust.
 
 ## Build
 
-The Xcode project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen):
+The Xcode project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen). You need the latest Xcode; the app runs on macOS 13 or later.
 
 ```sh
 brew install xcodegen
@@ -66,28 +98,28 @@ xcodegen generate
 open Agamemnon.xcodeproj
 ```
 
-GitHub Actions builds a universal app and DMG on every push (`.github/workflows/build.yml`) and publishes it as the **Nightly build** release. To ship a signed and notarized DMG, add these repository secrets:
+Before changing detection, quarantine, real-time protection or DNS, read [HOW_IT_WORKS.md](HOW_IT_WORKS.md) and the rules in [AGENTS.md](AGENTS.md).
+
+### Releases
+
+GitHub Actions (`.github/workflows/build.yml`) builds a universal app and DMG on every push:
+
+- **Every push to `main`** updates the **Nightly build** release.
+- **Pushing a tag that starts with `v`** (for example `v2.25`) creates a versioned release with the DMG attached. Set `MARKETING_VERSION` in `project.yml` first.
+
+To ship a signed and notarized DMG instead of an ad-hoc one, add these repository secrets:
 
 - `DEVELOPER_ID_P12`: your Developer ID Application certificate, as a base64-encoded .p12
 - `DEVELOPER_ID_P12_PASSWORD`: the password for that .p12
 - `APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD`: for notarization
 
-## Limits
-
-- Download protection reacts within about 2 seconds of a download finishing. Blocking a file *before* any app can open it needs Apple's Endpoint Security entitlement, which this build doesn't have.
-- Encrypted DNS uses a configuration profile, so macOS asks you to approve it in System Settings.
-- Admin access alerts read the system log, which needs an administrator account.
-- No antivirus catches everything. Keep macOS updated and only install software you trust.
-
 ## Agamemnon for Windows
 
-The Windows build lives in its own repository: **[Agamemnon-Intelligence/Agamemnon-windows](https://github.com/Agamemnon-Intelligence/Agamemnon-windows)**.
-
-It's still in development. Downloads, build instructions and issues for the Windows version are in that repository.
+The Windows app lives in its own repository: **[Agamemnon-Intelligence/Agamemnon-windows](https://github.com/Agamemnon-Intelligence/Agamemnon-windows)**. It has its own pattern rules, malware-site checks and signature checks. Downloads, build instructions and issues for Windows are there.
 
 ## Credits
 
-Created by [mirazbakis](https://github.com/mirazbakis) and [mertyesileducation](https://github.com/mertyesileducation).
+Created by [mirazbakis](https://github.com/mirazbakis) and [mertyesileducation](https://github.com/mertyesileducation), [Athene Softworks](https://athenesoftworks.com).
 
 Malware hashes come from MalwareBazaar (abuse.ch) and VirusShare, and malware links from URLhaus (abuse.ch). The second engine is ClamAV by Cisco Talos. The emblem is built around *The Sacrifice of Iphigenia* by Giovanni Battista Tiepolo, which is in the public domain.
 
