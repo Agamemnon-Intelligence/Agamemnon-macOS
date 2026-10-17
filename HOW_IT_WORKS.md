@@ -10,6 +10,7 @@ This document explains what Agamemnon does under the hood: how it finds malware,
 4. [Looking inside archives, installers and disk images](#looking-inside-archives-installers-and-disk-images)
 5. [The quarantine vault](#the-quarantine-vault)
 6. [Real-time protection](#real-time-protection)
+   - [Behaviour protection](#behaviour-protection)
 7. [Encrypted DNS](#encrypted-dns)
 8. [Scheduled scans and running in the background](#scheduled-scans-and-running-in-the-background)
 9. [Where Agamemnon keeps its data](#where-agamemnon-keeps-its-data)
@@ -31,6 +32,7 @@ Agamemnon is a native SwiftUI app. It lives in the menu bar, so its protection k
   New download ►│  DownloadGuard (FSEvents) ───────────────┤                    │
                 │                                          ▼                    │
   New startup  ►│  BackgroundItemWatcher (FSEvents) ──► ScanEngine              │
+  New program  ►│  BehaviorMonitor (libproc, 1 s) ──► BehaviorRules + hashes    │
   item          │                                          │                    │
                 │        ┌─────────────────────────────────┼──────────────┐     │
                 │        ▼                 ▼               ▼              ▼     │
@@ -85,6 +87,14 @@ spctl --assess --type install  Some.pkg
 | No signature | **Suspicious:** "Unsigned app" |
 | Signed but not notarized | **Suspicious:** "Not notarized by Apple" |
 | Developer certificate revoked | **Malware:** Apple revokes certificates it has caught being used for malware |
+
+**Agamemnon's own builds.** Nightly builds without a Developer ID are ad-hoc signed, so Gatekeeper rejects them. Agamemnon doesn't warn about a copy of itself, but the bundle ID alone isn't trusted, because malware can copy it. The app must have Agamemnon's bundle ID and a valid signature, **and** one of these must hold:
+
+- it's exactly the build that's running (same code-directory hash),
+- it's signed by the same Developer ID team as the running build, or
+- macOS's "Where from" record shows it was downloaded from `github.com/Agamemnon-Intelligence/Agamemnon-macOS/` or `athenesoftworks.com`.
+
+Only the Gatekeeper warning is skipped. Hash and ClamAV checks still run on it.
 
 A suspicious item isn't necessarily malware: plenty of small open-source apps aren't notarized. That's why suspicious items are only flagged, unless you turn on **Quarantine apps Apple hasn't verified**.
 
@@ -213,6 +223,40 @@ Mac malware usually makes itself start automatically by dropping a `.plist` into
 
 Agamemnon notes what's already there when it starts, then watches for new or changed files. When one appears, it reads the item's name and the program it launches, notifies you, and scans both the plist and the program. Known malware is quarantined.
 
+### Behaviour protection
+
+Malware families change their files constantly, so a new build of AMOS has a hash nobody has seen yet. What they *do* once they run changes much less. Behaviour protection watches programs as they start and looks for those actions.
+
+About once a second, Agamemnon lists running processes with `proc_listallpids` and reads each **new** one's path, parent and command line (`proc_pidinfo`, `KERN_PROCARGS2`). It launches no tools to do this. Each new program outside macOS's own folders is also checked against the malware hash list.
+
+| What it recognises | How | Seen in | Confidence |
+| --- | --- | --- | --- |
+| Fake password prompt | `osascript` showing a `display dialog` with `hidden answer` | AMOS, FrigidStealer, Banshee | High |
+| Collecting browser data with a script | `osascript` reading browser cookies or saved logins, Apple Notes or the keychain file | AMOS, FrigidStealer, Banshee | High |
+| Backdoor posing as a macOS update | Running from `~/Library/MacOsServices/` or named `updateMacOs` | SysJoker | High if unsigned |
+| Checking the stolen password | `dscl … -authonly`, started by an unsigned program | AMOS, Banshee | High (medium otherwise) |
+| Browser password theft | `security find-generic-password … Safe Storage`, or `security dump-keychain` | KeySteal, AMOS | High |
+| Uploading stolen files | `curl`/`wget` uploading a file from a temp folder to a bare IP address | AMOS, FrigidStealer | High |
+| Cryptocurrency mining | `stratum+tcp://` / `stratum+ssl://` arguments, or known miner names | CoinMiner | High |
+| Fake job-interview malware | Running from `~/.n2`, `~/.n3`, `~/.pyp` or `~/.npl` | BeaverTail, InvisibleFerret | High |
+| Known malware file | The program's SHA-256 is on the MalwareBazaar list | Any | High |
+| Running a script straight from the internet | A shell running `curl … \| sh`, `$(curl …)` or `base64 -d \| sh` (official installers such as Homebrew and rustup are allowed) | AMOS "ClickFix", Shlayer, Bundlore | Medium |
+| Unsigned program in an odd place | An unsigned or ad-hoc program running from `/tmp`, `/Users/Shared` or a hidden folder in `~/Library` | SysJoker, Shlayer, Bundlore | Medium |
+| Hidden miner | An unsigned program keeping a CPU core over 85 % busy for 10 minutes | CoinMiner | Medium |
+
+**What happens next.** Medium findings are only reported: a notification, an entry in Recent Activity, and an alert on the Real-Time Protection page with **Stop**, **Quarantine** and **Trust** buttons. High findings are acted on automatically when **Stop dangerous programs automatically** is on (the default):
+
+1. The process doing it is stopped.
+2. Agamemnon walks up the parent chain to the nearest **unsigned or ad-hoc** program installed by the user. That's the program held responsible. It's stopped too, and moved to quarantine (the whole `.app` if it's inside one).
+
+**Guardrails.** These keep behaviour protection from turning on the user:
+
+- Programs that are part of macOS, signed by Apple, or signed with a Developer ID are **never** stopped or quarantined automatically. The one exception is the single running instance of a system tool (`osascript`, `curl`, `security`, `dscl`…) caught doing the malicious thing itself. Stopping that instance is harmless.
+- Interpreters and shells (`python`, `node`, `bash`…), and anything installed by a package or version manager (Homebrew, MacPorts, nvm, pyenv, cargo…), are never quarantined.
+- Agamemnon never touches itself, other users' processes or root processes.
+- Nothing is deleted. Quarantined programs can be restored from the Quarantine page.
+- **Trust** stops all alerts about a program. Trusted programs are listed on the Real-Time Protection page and can be removed there.
+
 ---
 
 ## Encrypted DNS
@@ -275,6 +319,7 @@ To remove Agamemnon completely: quit it, delete the app, delete `~/Library/Appli
 No antivirus catches everything. Agamemnon is honest about what it can and can't do:
 
 - **Hash matching only catches known files.** Brand-new or slightly altered malware has a fingerprint nobody has seen yet. Installing ClamAV adds pattern-based detection, but neither engine replaces keeping macOS up to date. macOS also has its own built-in protection, XProtect.
+- **Behaviour protection reacts just after a program starts, not before.** It checks new processes about once a second, so a program that starts and finishes within a second can be missed, and it can't see which files a program opens. Blocking programs before they run, and watching file access, both need Apple's Endpoint Security entitlement.
 - **Download protection reacts after the download finishes.** It usually acts within about 2 seconds. Truly blocking a file *before* any app can open it needs Apple's Endpoint Security entitlement, which this version doesn't have.
 - **Encrypted DNS needs your approval** in System Settings. A VPN's own DNS settings override it while the VPN is connected.
 - **Admin alerts need an admin account** and depend on macOS's log messages. Apple can change those messages between versions.
@@ -292,6 +337,9 @@ App/
 │   ├── ScanEngine.swift        Walks files, runs every check, gathers results
 │   ├── ArchiveInspector.swift  bsdtar / hdiutil / pkgutil with safety limits
 │   ├── Gatekeeper.swift        spctl assessment of apps and installers
+│   ├── CodeIdentity.swift      Who signed a program; recognising Agamemnon's own builds
+│   ├── ProcessList.swift       Running processes via libproc / sysctl
+│   ├── BehaviorRules.swift     What stealers, backdoors and miners do
 │   ├── ClamAV.swift            Finds clamscan, runs freshclam and clamscan
 │   └── Models.swift            Detection, ScanKind, ScanSummary…
 ├── Services/
@@ -301,12 +349,14 @@ App/
 │   ├── QuarantineVault.swift   Quarantine, restore, delete
 │   ├── DownloadGuard.swift     Download protection
 │   ├── SystemWatchers.swift    Admin access alerts + background item alerts
+│   ├── BehaviorMonitor.swift   Behaviour protection and its guardrails
 │   ├── DNSManager.swift        Providers, profile generation, status
 │   ├── ScanScheduler.swift     Scheduled scans + open at login
 │   └── ActivityLog.swift       Recent activity + notifications
 ├── Support/                    Process runner, FSEvents wrapper, paths, prefs,
 │                               admin prompt helper
-└── Views/                      SwiftUI pages, midnight theme, Liquid Glass
+└── Views/                      SwiftUI pages, midnight theme; Liquid Glass on the
+                                sidebar and buttons, solid panels for content
 ```
 
 The build is described in `project.yml` (XcodeGen) and `.github/workflows/build.yml`, which builds a universal app and packs it into a DMG.

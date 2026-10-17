@@ -14,6 +14,9 @@ enum Prefs {
     static let exclusions = "exclusions"
     static let watchedFolders = "watchedFolders"
     static let onboardingDone = "onboardingDone"
+    static let behaviorProtection = "behaviorProtection"
+    static let behaviorAutoStop = "behaviorAutoStop"
+    static let trustedPrograms = "trustedPrograms"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -26,6 +29,8 @@ enum Prefs {
             backgroundItemAlerts: true,
             autoUpdateSignatures: true,
             notifications: true,
+            behaviorProtection: true,
+            behaviorAutoStop: true,
         ])
     }
 

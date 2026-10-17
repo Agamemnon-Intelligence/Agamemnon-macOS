@@ -15,6 +15,7 @@ final class AppModel: ObservableObject {
     let downloads: DownloadGuard
     let admin: AdminWatcher
     let backgroundItems: BackgroundItemWatcher
+    let behavior: BehaviorMonitor
     let dns: DNSManager
     let scheduler: ScanScheduler
 
@@ -36,6 +37,7 @@ final class AppModel: ObservableObject {
         downloads = DownloadGuard(vault: vault)
         admin = AdminWatcher()
         backgroundItems = BackgroundItemWatcher(vault: vault)
+        behavior = BehaviorMonitor(vault: vault)
         dns = DNSManager()
         scheduler = ScanScheduler(scanner: scanner)
 
@@ -46,6 +48,7 @@ final class AppModel: ObservableObject {
             scanner.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             downloads.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             dns.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            behavior.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
         ]
         for publisher in children {
             publisher
@@ -64,6 +67,7 @@ final class AppModel: ObservableObject {
         downloads.applyPreference()
         admin.applyPreference()
         backgroundItems.applyPreference()
+        behavior.applyPreference()
         scheduler.start()
         dns.refreshStatus()
         refreshEnvironment()
@@ -74,6 +78,7 @@ final class AppModel: ObservableObject {
         downloads.applyPreference()
         admin.applyPreference()
         backgroundItems.applyPreference()
+        behavior.applyPreference()
     }
 
     func refreshEnvironment() {
@@ -156,7 +161,7 @@ final class AppModel: ObservableObject {
     var status: Status {
         if !scanner.detections.filter({ $0.level != .test }).isEmpty { return .threats }
         if scanner.isScanning { return .scanning }
-        if signatures.count == 0 || !downloads.isRunning { return .attention }
+        if signatures.count == 0 || !downloads.isRunning || !behavior.isRunning { return .attention }
         return .protected
     }
 
@@ -173,6 +178,7 @@ final class AppModel: ObservableObject {
         var reasons: [String] = []
         if signatures.count == 0 { reasons.append(signatures.isUpdating ? "Downloading malware signatures…" : "Malware signatures haven't been downloaded yet.") }
         if !downloads.isRunning { reasons.append("Download protection is off.") }
+        if !behavior.isRunning { reasons.append("Behaviour protection is off.") }
         return reasons
     }
 }

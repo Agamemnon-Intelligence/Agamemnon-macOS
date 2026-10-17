@@ -70,12 +70,14 @@ xcodebuild -project Agamemnon.xcodeproj -scheme Agamemnon -configuration Debug b
   - accent `#5B93FF`
   - gold `#D8B26A`
   - success, warning and danger colours for status
+- **Liquid Glass is for controls and navigation only** (buttons, the system sidebar). Content uses `Card` / `.panel(shape)`, which are solid. Glass on top of glass blurs whatever is behind it, including labels.
 - **Liquid Glass:** use the helpers in `Theme.swift` instead of calling `glassEffect` directly:
   - `.liquidGlass(shape, tint:, interactive:)` draws real Liquid Glass on macOS 26 and a frosted fallback on 13 to 15.
   - `.glassGroup(spacing:)` wraps related glass shapes in a `GlassEffectContainer` on macOS 26.
-  - `Card { }`, `Notice`, `NavyButtonStyle` (`.navy`, `.navySecondary`, `.navyDestructive`, `.navyCompact`) and `AuroraBackground` already use them.
+  - `NavyButtonStyle` (`.navy`, `.navySecondary`, `.navyDestructive`, `.navyCompact`) uses them. `Card { }` and `Notice` are solid panels.
+- **Window:** a `NavigationSplitView` with the system sidebar (`Sidebar` in `ContentView.swift`), which macOS 26 draws as Liquid Glass.
 - **Page structure:** pages use `Page { PageHeader(...) … Card { … } }`, and settings rows use `SettingRow`.
-- **New sidebar pages:** add a case to `AppSection` (title and SF Symbol), then a branch in `ContentView.detail`.
+- **New sidebar pages:** add a case to `AppSection` (title and SF Symbol), add it to a section in `Sidebar`, then a branch in `ContentView.detail`.
 - **New services:** add the service to `AppModel` and inject it in `agamemnonEnvironment`.
 - **Copy:** user-facing text is plain, friendly English, written for non-technical users.
 
@@ -84,18 +86,19 @@ xcodebuild -project Agamemnon.xcodeproj -scheme Agamemnon -configuration Debug b
 This is security software. A bug can delete user files or let malware through. Follow these rules.
 
 1. **Never delete user files directly.** Threats are *moved* to the quarantine vault (`QuarantineVault.quarantine`). Only the user deletes them for good.
-2. **Suspicious ≠ malicious.** Gatekeeper findings (unsigned or un-notarized) and ClamAV `PUA.*` hits are `.suspicious`. They are never auto-quarantined unless the user turns on that setting.
-3. **Keep the archive safety limits** in `ArchiveInspector`: list before extracting, a 4 GB expanded-size cap, 100,000 entries, 3 levels of nesting, timeouts, read-only `-nobrowse` disk image mounts, skipping encrypted images and archives instead of prompting, and always cleaning up scratch folders and detaching images. Don't loosen these without a clear reason in the PR.
-4. **Never execute, open or `Process`-launch a file being scanned.** Only read it, hash it, or hand it to the unpack and assessment tools.
-5. **Admin rights** go only through `Privileged.run`, only for quarantine or restore in protected locations and for removing the DNS profile. Shell-quote every path with `Shell.quote`.
-6. **Privacy:**
+2. **Behaviour protection must never turn on the user.** Only high-confidence `BehaviorRules` findings are acted on automatically. Never stop or quarantine Apple-signed, Developer ID-signed, package-manager-installed or interpreter programs automatically (see the guardrails in `BehaviorMonitor`). New rules must be narrow. Test them against a normal developer Mac for false alarms before shipping.
+3. **Suspicious ≠ malicious.** Gatekeeper findings (unsigned or un-notarized) and ClamAV `PUA.*` hits are `.suspicious`. They are never auto-quarantined unless the user turns on that setting.
+4. **Keep the archive safety limits** in `ArchiveInspector`: list before extracting, a 4 GB expanded-size cap, 100,000 entries, 3 levels of nesting, timeouts, read-only `-nobrowse` disk image mounts, skipping encrypted images and archives instead of prompting, and always cleaning up scratch folders and detaching images. Don't loosen these without a clear reason in the PR.
+5. **Never execute, open or `Process`-launch a file being scanned.** Only read it, hash it, or hand it to the unpack and assessment tools.
+6. **Admin rights** go only through `Privileged.run`, only for quarantine or restore in protected locations and for removing the DNS profile. Shell-quote every path with `Shell.quote`.
+7. **Privacy:**
    - No telemetry, analytics, crash reporters or file uploads.
    - The only network calls are the MalwareBazaar exports, ClamAV's `freshclam`, and the GitHub avatars on the About page. Don't add more without discussing it.
-7. **Signature data:**
+8. **Signature data:**
    - The MalwareBazaar exports at `https://bazaar.abuse.ch/export/txt/sha256/{full,recent}/` are CC0 and work without an auth key. The newer `mb-api.abuse.ch/v2` exports need a key, so don't switch to them silently.
    - Keep the binary format: sorted 32-byte records. Loading it and doing lookups depend on that format.
-8. **Don't overstate protection** in the UI or docs. Known limits are listed in HOW_IT_WORKS.md: hash matching only catches known samples, download protection acts just after the download finishes rather than blocking it, encrypted DNS needs the user's approval, and admin alerts need an admin account.
-9. **Never add or commit real malware samples.** For testing, use the EICAR test file (`Eicar.signature`).
+9. **Don't overstate protection** in the UI or docs. Known limits are listed in HOW_IT_WORKS.md: hash matching only catches known samples, download protection acts just after the download finishes rather than blocking it, encrypted DNS needs the user's approval, and admin alerts need an admin account.
+10. **Never add or commit real malware samples.** For testing, use the EICAR test file (`Eicar.signature`).
 
 ## Testing changes
 

@@ -232,6 +232,8 @@ final class ScanEngine {
     /// Gatekeeper check for .app bundles and installer packages.
     private func checkBundle(_ url: URL, container: URL?, extractionRoot: URL?, innerBase: String?) {
         guard ["app", "pkg", "mpkg"].contains(url.pathExtension.lowercased()) else { return }
+        // Agamemnon's own (ad-hoc signed) builds aren't notarized; don't warn about ourselves.
+        if CodeIdentity.isGenuineAgamemnon(url, download: container) { return }
         guard let verdict = Gatekeeper.assess(url), !verdict.accepted else { return }
         let outer = container ?? url
         let inner = innerPath(of: url, extractionRoot: extractionRoot, innerBase: innerBase)

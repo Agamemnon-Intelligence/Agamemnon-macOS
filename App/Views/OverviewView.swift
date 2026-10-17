@@ -9,6 +9,9 @@ struct OverviewView: View {
     @EnvironmentObject private var dns: DNSManager
     @EnvironmentObject private var vault: QuarantineVault
     @EnvironmentObject private var activity: ActivityLog
+    @EnvironmentObject private var behavior: BehaviorMonitor
+    @EnvironmentObject private var admin: AdminWatcher
+    @EnvironmentObject private var backgroundItems: BackgroundItemWatcher
 
     var body: some View {
         Page {
@@ -55,58 +58,61 @@ struct OverviewView: View {
     // MARK: - Hero
 
     private var hero: some View {
-        Card(padding: 24) {
-            HStack(spacing: 24) {
-                Image("Emblem")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 128, height: 128)
-                    .shadow(color: Theme.gold.opacity(0.25), radius: 18)
-                    .padding(8)
-                    .liquidGlass(Circle(), tint: Theme.gold.opacity(0.10))
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        Image(systemName: model.status.symbol)
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(statusColor)
+        Card(padding: 26, tint: statusColor.opacity(0.10)) {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(spacing: 26) {
+                    StatusRing(symbol: model.status.symbol, color: statusColor, spinning: model.status == .scanning)
+                    VStack(alignment: .leading, spacing: 8) {
                         Text(model.status.title)
-                            .font(.system(size: 24, weight: .bold))
+                            .font(.system(size: 26, weight: .bold, design: .rounded))
                             .foregroundStyle(Theme.text)
-                    }
-                    if model.status == .threats {
-                        Text("The last scan found \(scanner.detections.count) item\(scanner.detections.count == 1 ? "" : "s") that still need a decision.")
-                            .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
-                    } else if model.status == .scanning {
-                        Text("\(scanner.kind?.title ?? "Scan") · \(scanner.filesScanned.formatted()) files checked")
-                            .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
-                    } else if model.attentionReasons.isEmpty {
-                        Text("Real-time download protection is on and your malware signatures are current.")
-                            .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
-                    } else {
-                        ForEach(model.attentionReasons, id: \.self) { reason in
-                            Label(reason, systemImage: "exclamationmark.circle")
-                                .font(.system(size: 13)).foregroundStyle(Theme.warning)
-                        }
-                    }
-                    HStack(spacing: 10) {
-                        if scanner.isScanning || model.status == .threats {
-                            Button("View Scan") { nav.section = .scan }.buttonStyle(.navy)
+                        if model.status == .threats {
+                            Text("The last scan found \(scanner.detections.count) item\(scanner.detections.count == 1 ? "" : "s") that still need a decision.")
+                                .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                        } else if model.status == .scanning {
+                            Text("\(scanner.kind?.title ?? "Scan") · \(scanner.filesScanned.formatted()) files checked")
+                                .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                        } else if model.attentionReasons.isEmpty {
+                            Text("Downloads, running programs and startup items are being watched, and your malware signatures are current.")
+                                .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         } else {
-                            Button {
-                                scanner.start(.quick)
-                                nav.section = .scan
-                            } label: { Label("Quick Scan", systemImage: "bolt.shield") }
-                                .buttonStyle(.navy)
-                            Button {
-                                scanner.start(.full)
-                                nav.section = .scan
-                            } label: { Label("Full Scan", systemImage: "internaldrive") }
-                                .buttonStyle(.navySecondary)
+                            ForEach(model.attentionReasons, id: \.self) { reason in
+                                Label(reason, systemImage: "exclamationmark.circle")
+                                    .font(.system(size: 13)).foregroundStyle(Theme.warning)
+                            }
                         }
+                        HStack(spacing: 10) {
+                            if scanner.isScanning || model.status == .threats {
+                                Button("View Scan") { nav.section = .scan }.buttonStyle(.navy)
+                            } else {
+                                Button {
+                                    scanner.start(.quick)
+                                    nav.section = .scan
+                                } label: { Label("Quick Scan", systemImage: "bolt.shield") }
+                                    .buttonStyle(.navy)
+                                Button {
+                                    scanner.start(.full)
+                                    nav.section = .scan
+                                } label: { Label("Full Scan", systemImage: "internaldrive") }
+                                    .buttonStyle(.navySecondary)
+                            }
+                        }
+                        .glassGroup(spacing: 10)
+                        .padding(.top, 6)
                     }
-                    .padding(.top, 4)
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+
+                Divider().overlay(Color.white.opacity(0.06))
+
+                HStack(spacing: 10) {
+                    LayerChip(symbol: "arrow.down.circle", title: "Downloads", on: downloads.isRunning)
+                    LayerChip(symbol: "eye", title: "Behaviour", on: behavior.isRunning)
+                    LayerChip(symbol: "gearshape.2", title: "Startup", on: backgroundItems.isRunning)
+                    LayerChip(symbol: "person.badge.key", title: "Admin alerts", on: admin.isRunning)
+                    LayerChip(symbol: "shield.checkered", title: "Signatures", on: signatures.count > 0)
+                }
             }
         }
     }
@@ -233,9 +239,75 @@ struct ActivityRow: View {
     private var color: Color {
         switch entry.kind {
         case .threat: return Theme.danger
-        case .quarantine, .admin, .background: return Theme.warning
+        case .quarantine, .admin, .background, .behavior: return Theme.warning
         case .scan, .update, .dns, .download: return Theme.accent
         case .restore, .info: return Theme.textSecondary
         }
+    }
+}
+
+/// The big status indicator on the Overview page.
+struct StatusRing: View {
+    let symbol: String
+    let color: Color
+    var spinning = false
+    @State private var angle = 0.0
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(RadialGradient(colors: [color.opacity(0.22), color.opacity(0.02)],
+                                     center: .center, startRadius: 4, endRadius: 64))
+            Circle()
+                .stroke(color.opacity(0.14), lineWidth: 8)
+            Circle()
+                .trim(from: 0, to: spinning ? 0.3 : 1)
+                .stroke(AngularGradient(colors: [color.opacity(0.35), color, color.opacity(0.35)], center: .center),
+                        style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                .rotationEffect(.degrees(angle - 90))
+            Image(systemName: symbol)
+                .font(.system(size: 42, weight: .semibold))
+                .foregroundStyle(color)
+                .shadow(color: color.opacity(0.5), radius: 12)
+        }
+        .frame(width: 118, height: 118)
+        .onAppear { spin(spinning) }
+        .onChange(of: spinning) { spin($0) }
+    }
+
+    private func spin(_ on: Bool) {
+        if on {
+            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { angle = 360 }
+        } else {
+            withAnimation(.easeOut(duration: 0.3)) { angle = 0 }
+        }
+    }
+}
+
+/// One protection layer and whether it's on.
+struct LayerChip: View {
+    let symbol: String
+    let title: String
+    let on: Bool
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(on ? Theme.success : Theme.warning)
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.text.opacity(0.9))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Image(systemName: on ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(on ? Theme.success : Theme.warning)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
     }
 }

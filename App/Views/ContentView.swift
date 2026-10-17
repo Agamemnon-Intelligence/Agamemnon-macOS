@@ -41,20 +41,21 @@ final class Navigator: ObservableObject {
 
 struct ContentView: View {
     @EnvironmentObject private var nav: Navigator
+    @State private var columns = NavigationSplitViewVisibility.all
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Floating Liquid Glass sidebar over the midnight aurora.
+        NavigationSplitView(columnVisibility: $columns) {
+            // The system sidebar: real Liquid Glass on macOS 26, a translucent sidebar before.
             Sidebar()
-                .frame(width: 232)
-                .liquidGlass(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .padding(.leading, 10)
-                .padding(.vertical, 10)
+                .frame(minWidth: 232)
+                .navigationSplitViewColumnWidth(min: 232, ideal: 240, max: 280)
+                .hideSidebarToggle()
+        } detail: {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AuroraBackground())
         }
-        .background(AuroraBackground())
-        .ignoresSafeArea()
+        .navigationSplitViewStyle(.balanced)
     }
 
     @ViewBuilder
@@ -72,59 +73,85 @@ struct ContentView: View {
     }
 }
 
+private extension View {
+    @ViewBuilder
+    func hideSidebarToggle() -> some View {
+        if #available(macOS 14.0, *) {
+            self.toolbar(removing: .sidebarToggle)
+        } else {
+            self
+        }
+    }
+}
+
 struct Sidebar: View {
     @EnvironmentObject private var nav: Navigator
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var vault: QuarantineVault
     @EnvironmentObject private var scanner: ScanController
-    @Namespace private var selectionNamespace
+
+    private var selection: Binding<AppSection?> {
+        Binding(get: { nav.section }, set: { if let value = $0 { nav.section = value } })
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Image("Emblem")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 38, height: 38)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Agamemnon")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(Theme.text)
+        List(selection: selection) {
+            Section {
+                ForEach([AppSection.overview, .scan, .quarantine]) { row($0) }
+            }
+            Section("Protection") {
+                ForEach([AppSection.protection, .dns, .schedule]) { row($0) }
+            }
+            Section {
+                ForEach([AppSection.settings, .about]) { row($0) }
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .safeAreaInset(edge: .top, spacing: 0) { header }
+        .safeAreaInset(edge: .bottom, spacing: 0) { footer }
+    }
+
+    private func row(_ section: AppSection) -> some View {
+        Label(section.title, systemImage: section.symbol)
+            .font(.system(size: 13, weight: .medium))
+            .badge(badge(for: section))
+            .tag(section)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image("Emblem")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Agamemnon")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.text)
+                HStack(spacing: 5) {
+                    Circle().fill(statusColor).frame(width: 6, height: 6)
                     Text(statusLine)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(statusColor)
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 40)
-            .padding(.bottom, 22)
-
-            VStack(spacing: 2) {
-                ForEach(AppSection.allCases) { section in
-                    SidebarItem(section: section,
-                                selected: nav.section == section,
-                                badge: badge(for: section),
-                                namespace: selectionNamespace) {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                            nav.section = section
-                        }
-                    }
-                }
-            }
-            .glassGroup(spacing: 6)
-            .padding(.horizontal, 10)
-
-            Spacer()
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Free & open source · GPLv2")
-                Text("by mirazbakis & mertyesileducation")
-            }
-            .font(.system(size: 10))
-            .foregroundStyle(Theme.textTertiary)
-            .padding(18)
+            Spacer(minLength: 0)
         }
-        .frame(maxHeight: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Free & open source · GPLv2")
+            Text("by mirazbakis & mertyesileducation")
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(Theme.textTertiary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
     }
 
     private var statusLine: String {
@@ -145,62 +172,11 @@ struct Sidebar: View {
         }
     }
 
-    private func badge(for section: AppSection) -> String? {
+    private func badge(for section: AppSection) -> Int {
         switch section {
-        case .quarantine: return vault.items.isEmpty ? nil : "\(vault.items.count)"
-        case .scan:
-            if scanner.isScanning { return "•" }
-            return scanner.detections.isEmpty ? nil : "\(scanner.detections.count)"
-        default: return nil
+        case .quarantine: return vault.items.count
+        case .scan: return scanner.isScanning ? 0 : scanner.detections.count
+        default: return 0
         }
-    }
-}
-
-private struct SidebarItem: View {
-    let section: AppSection
-    let selected: Bool
-    let badge: String?
-    let namespace: Namespace.ID
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: section.symbol)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 20)
-                    .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
-                Text(section.title)
-                    .font(.system(size: 13, weight: selected ? .semibold : .medium))
-                    .foregroundStyle(selected ? Theme.text : Theme.textSecondary)
-                Spacer()
-                if let badge {
-                    Text(badge)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(section == .quarantine ? Theme.navyHover : Theme.danger))
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background {
-                if selected {
-                    // A navy glass pill that slides between items.
-                    Color.clear
-                        .liquidGlass(RoundedRectangle(cornerRadius: 11, style: .continuous),
-                                     tint: Theme.navy.opacity(0.85), interactive: true)
-                        .matchedGeometryEffect(id: "selection", in: namespace)
-                } else if hovering {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(Color.white.opacity(0.05))
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
     }
 }

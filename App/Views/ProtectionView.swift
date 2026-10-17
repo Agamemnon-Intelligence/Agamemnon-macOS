@@ -6,11 +6,15 @@ struct ProtectionView: View {
     @EnvironmentObject private var downloads: DownloadGuard
     @EnvironmentObject private var admin: AdminWatcher
     @EnvironmentObject private var backgroundItems: BackgroundItemWatcher
+    @EnvironmentObject private var behavior: BehaviorMonitor
 
     @AppStorage(Prefs.downloadProtection) private var downloadProtection = true
     @AppStorage(Prefs.adminAlerts) private var adminAlerts = true
     @AppStorage(Prefs.backgroundItemAlerts) private var backgroundItemAlerts = true
     @AppStorage(Prefs.quarantineUnnotarized) private var quarantineUnnotarized = false
+    @AppStorage(Prefs.behaviorProtection) private var behaviorProtection = true
+    @AppStorage(Prefs.behaviorAutoStop) private var behaviorAutoStop = true
+    @State private var trusted: [String] = UserDefaults.standard.stringArray(forKey: Prefs.trustedPrograms) ?? []
     @State private var testMessage: String?
 
     var body: some View {
@@ -18,6 +22,7 @@ struct ProtectionView: View {
             PageHeader(title: "Real-Time Protection",
                        subtitle: "Agamemnon keeps watch in the background while it's in your menu bar.")
 
+            behaviorCard
             downloadsCard
             adminCard
             backgroundCard
@@ -26,6 +31,71 @@ struct ProtectionView: View {
         .onChange(of: downloadProtection) { _ in model.preferencesChanged() }
         .onChange(of: adminAlerts) { _ in model.preferencesChanged() }
         .onChange(of: backgroundItemAlerts) { _ in model.preferencesChanged() }
+        .onChange(of: behaviorProtection) { _ in model.preferencesChanged() }
+    }
+
+    // MARK: - Behaviour
+
+    private var behaviorCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 14) {
+                SettingRow(symbol: "eye.trianglebadge.exclamationmark", title: "Behaviour protection",
+                           detail: "Watches programs as they run and recognises what stealers, backdoors and miners do: fake password prompts, reading browser passwords from the keychain, uploading stolen files, mining, and running scripts straight from the internet. New programs are also checked against the malware list.",
+                           color: behavior.isRunning ? Theme.success : Theme.warning) {
+                    Toggle("", isOn: $behaviorProtection).toggleStyle(.switch).labelsHidden()
+                }
+                SettingRow(symbol: "hand.raised.fill", title: "Stop dangerous programs automatically",
+                           detail: "Only for clear-cut cases. Agamemnon never stops or moves anything that's part of macOS or signed by a known developer, and stopped programs go to Quarantine, where you can restore them.",
+                           color: Theme.accent) {
+                    Toggle("", isOn: $behaviorAutoStop).toggleStyle(.switch).labelsHidden()
+                }
+                    .disabled(!behaviorProtection)
+
+                if behavior.isRunning {
+                    Text("\(behavior.processesChecked.formatted()) programs checked since Agamemnon started.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+                }
+
+                if !behavior.alerts.isEmpty {
+                    Divider().overlay(Theme.stroke)
+                    HStack {
+                        SectionTitle(text: "Recent alerts")
+                        Spacer()
+                        Button("Clear") { behavior.clearAlerts() }.buttonStyle(.navyCompact)
+                    }
+                    ForEach(behavior.alerts.prefix(8)) { alert in
+                        BehaviorAlertRow(alert: alert)
+                    }
+                }
+
+                if !trusted.isEmpty {
+                    Divider().overlay(Theme.stroke)
+                    SectionTitle(text: "Programs you trust")
+                    ForEach(trusted, id: \.self) { path in
+                        HStack {
+                            Text(path).font(.system(size: 12)).foregroundStyle(Theme.text)
+                                .lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Button { untrust(path) } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.plain).foregroundStyle(Theme.textSecondary)
+                                .help("Stop trusting this program")
+                        }
+                    }
+                }
+
+                Notice(symbol: "info.circle",
+                       text: "Agamemnon checks new programs about once a second, so it reacts just after something starts rather than before. Blocking programs before they run needs an Apple entitlement this version doesn't have.",
+                       color: Theme.accent)
+            }
+        }
+        .onReceive(behavior.$alerts) { _ in
+            trusted = UserDefaults.standard.stringArray(forKey: Prefs.trustedPrograms) ?? []
+        }
+    }
+
+    private func untrust(_ path: String) {
+        trusted.removeAll { $0 == path }
+        UserDefaults.standard.set(trusted, forKey: Prefs.trustedPrograms)
     }
 
     // MARK: - Downloads
@@ -199,4 +269,54 @@ struct ProtectionView: View {
 
 extension String {
     var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+}
+
+private struct BehaviorAlertRow: View {
+    let alert: BehaviorMonitor.Alert
+    @EnvironmentObject private var behavior: BehaviorMonitor
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                IconBadge(symbol: alert.finding.confidence == .high ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill",
+                          color: alert.finding.confidence == .high ? Theme.danger : Theme.warning, size: 30)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(alert.finding.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                    Text(((alert.culpritPath ?? alert.path) as NSString).lastPathComponent + " · " + alert.outcome)
+                        .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1).truncationMode(.middle)
+                    Text("Seen in: \(alert.finding.families)")
+                        .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+                }
+                Spacer()
+                Text(alert.date.relative).font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+            }
+            if expanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(alert.finding.explanation)
+                        .font(.system(size: 12)).foregroundStyle(Theme.text.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(alert.commandLine)
+                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.textSecondary)
+                        .lineLimit(4).textSelection(.enabled)
+                }
+                .padding(.leading, 42)
+            }
+            HStack(spacing: 8) {
+                Button(expanded ? "Less" : "Details") { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } }
+                    .buttonStyle(.navyCompact)
+                Spacer()
+                if !alert.handled {
+                    Button("Stop") { behavior.stopProcess(alert) }.buttonStyle(.navyCompact)
+                    Button("Quarantine") { behavior.quarantine(alert) }
+                        .buttonStyle(NavyButtonStyle(kind: .destructive, compact: true))
+                }
+                Button("Trust") { behavior.trust(alert) }.buttonStyle(.navyCompact)
+                    .help("Never warn about this program again")
+            }
+            .padding(.leading, 42)
+        }
+        .padding(.vertical, 4)
+    }
 }

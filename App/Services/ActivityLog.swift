@@ -8,7 +8,7 @@ final class ActivityLog: ObservableObject {
     static let shared = ActivityLog()
 
     enum Kind: String, Codable {
-        case scan, threat, quarantine, restore, download, admin, background, dns, update, info
+        case scan, threat, quarantine, restore, download, admin, background, behavior, dns, update, info
 
         var symbol: String {
             switch self {
@@ -19,6 +19,7 @@ final class ActivityLog: ObservableObject {
             case .download: return "arrow.down.circle.fill"
             case .admin: return "person.badge.key.fill"
             case .background: return "gearshape.2.fill"
+            case .behavior: return "eye.trianglebadge.exclamationmark"
             case .dns: return "network.badge.shield.half.filled"
             case .update: return "arrow.triangle.2.circlepath"
             case .info: return "info.circle"

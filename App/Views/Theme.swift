@@ -33,6 +33,12 @@ enum Theme {
     static let background = LinearGradient(colors: [midnightHigh, midnight],
                                             startPoint: .top, endPoint: .bottom)
 
+    /// Content panels: solid, so text stays crisp. Liquid Glass is kept for controls.
+    static let panel = LinearGradient(colors: [cardRaised.opacity(0.94), card.opacity(0.90)],
+                                      startPoint: .top, endPoint: .bottom)
+    static let panelStroke = LinearGradient(colors: [Color.white.opacity(0.11), Color.white.opacity(0.03)],
+                                            startPoint: .top, endPoint: .bottom)
+
     static func color(for level: ThreatLevel) -> Color {
         switch level {
         case .malicious: return danger
@@ -72,8 +78,16 @@ struct NavyButtonStyle: ButtonStyle {
                 if #available(macOS 26.0, *) {
                     // Liquid Glass: navy-tinted for primary buttons, clear glass otherwise.
                     label
+                        // A real colour under the glass, so primary buttons stay blue
+                        // even when macOS mutes glass tints (inactive windows, Reduce Transparency).
+                        .background {
+                            if kind == .primary {
+                                shape.fill(LinearGradient(colors: [Theme.accent.opacity(hovering ? 0.95 : 0.85), Theme.navyHover],
+                                                          startPoint: .top, endPoint: .bottom))
+                            }
+                        }
                         .glassEffect(glass, in: shape)
-                        .scaleEffect(configuration.isPressed ? 0.97 : 1)
+                        .scaleEffect(configuration.isPressed ? 0.96 : 1)
                 } else {
                     label
                         .background(shape.fill(fill))
@@ -91,7 +105,7 @@ struct NavyButtonStyle: ButtonStyle {
         private var glass: Glass {
             switch kind {
             case .primary:
-                return Glass.regular.tint(hovering ? Theme.navyHover : Theme.navy).interactive()
+                return Glass.regular.tint(Theme.accent.opacity(0.35)).interactive()
             case .secondary:
                 return Glass.regular.interactive()
             case .destructive:
@@ -146,7 +160,7 @@ struct Card<Content: View>: View {
         content()
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .liquidGlass(RoundedRectangle(cornerRadius: 18, style: .continuous), tint: tint)
+            .panel(RoundedRectangle(cornerRadius: 18, style: .continuous), tint: tint)
     }
 }
 
@@ -164,6 +178,16 @@ extension View {
                 .background(shape.fill(.ultraThinMaterial))
                 .overlay(shape.stroke(Theme.stroke, lineWidth: 1))
         }
+    }
+
+    /// A solid midnight panel with a hairline edge, for content (cards, notices).
+    /// Glass on glass blurs text, so content never uses Liquid Glass.
+    func panel<S: InsettableShape>(_ shape: S, tint: Color? = nil) -> some View {
+        self
+            .background(shape.fill(Theme.panel))
+            .background(shape.fill(tint ?? .clear).opacity(0.5))
+            .overlay(shape.strokeBorder(Theme.panelStroke, lineWidth: 1))
+            .shadow(color: .black.opacity(0.28), radius: 16, y: 8)
     }
 
     /// Groups nearby glass shapes so they blend and morph together (macOS 26+).
@@ -193,12 +217,12 @@ struct AuroraBackground: View {
         ZStack {
             Theme.background
             Circle()
-                .fill(Theme.navyHover.opacity(0.55))
+                .fill(Theme.navyHover.opacity(0.45))
                 .frame(width: 520, height: 520)
                 .blur(radius: 140)
                 .offset(x: -260, y: -240)
             Circle()
-                .fill(Theme.accent.opacity(0.22))
+                .fill(Theme.accent.opacity(0.16))
                 .frame(width: 420, height: 420)
                 .blur(radius: 150)
                 .offset(x: 320, y: 60)
@@ -220,7 +244,7 @@ struct PageHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 26, weight: .bold))
+                .font(.system(size: 28, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.text)
             Text(subtitle)
                 .font(.system(size: 13))
@@ -315,7 +339,8 @@ struct Notice: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .liquidGlass(RoundedRectangle(cornerRadius: 12, style: .continuous), tint: color.opacity(0.14))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(color.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(color.opacity(0.28), lineWidth: 1))
     }
 }
 

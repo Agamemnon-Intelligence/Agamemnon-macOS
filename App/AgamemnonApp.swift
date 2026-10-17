@@ -63,6 +63,7 @@ extension View {
             .environmentObject(model.downloads)
             .environmentObject(model.admin)
             .environmentObject(model.backgroundItems)
+            .environmentObject(model.behavior)
             .environmentObject(model.dns)
             .environmentObject(model.scheduler)
     }
