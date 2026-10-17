@@ -23,7 +23,10 @@ struct ProtectionView: View {
                        subtitle: "Agamemnon keeps watch in the background while it's in your menu bar.")
 
             behaviorCard
+            RansomwareCard()
             downloadsCard
+            BrowserCard()
+            StartupSweepCard()
             adminCard
             backgroundCard
             testCard
@@ -40,7 +43,7 @@ struct ProtectionView: View {
         Card {
             VStack(alignment: .leading, spacing: 14) {
                 SettingRow(symbol: "eye.trianglebadge.exclamationmark", title: "Behaviour protection",
-                           detail: "Watches programs as they run and recognises what stealers, backdoors and miners do: fake password prompts, reading browser passwords from the keychain, uploading stolen files, mining, and running scripts straight from the internet. New programs are also checked against the malware list.",
+                           detail: "Watches programs as they run and recognises what stealers, backdoors, spyware and miners do: fake password prompts, stealing passwords, crypto wallets and browser data, secret screenshots, switching off macOS's download check, and downloading from known malware sites. New programs and scripts are also checked against the malware list and Agamemnon's pattern rules.",
                            color: behavior.isRunning ? Theme.success : Theme.warning) {
                     Toggle("", isOn: $behaviorProtection).toggleStyle(.switch).labelsHidden()
                 }
@@ -104,7 +107,7 @@ struct ProtectionView: View {
         Card {
             VStack(alignment: .leading, spacing: 14) {
                 SettingRow(symbol: "arrow.down.circle.fill", title: "Download protection",
-                           detail: "Every new download is checked the moment it finishes, including inside ZIP, RAR, 7Z, DMG, PKG and ISO files. Dangerous files go straight to quarantine.",
+                           detail: "Every new download is checked the moment it finishes, including inside ZIP, RAR, 7Z, DMG, PKG and ISO files, and against a live list of malware sites it may have come from. Dangerous files go straight to quarantine.",
                            color: downloads.isRunning ? Theme.success : Theme.warning) {
                     Toggle("", isOn: $downloadProtection).toggleStyle(.switch).labelsHidden()
                 }

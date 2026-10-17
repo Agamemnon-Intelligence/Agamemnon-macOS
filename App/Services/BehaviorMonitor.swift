@@ -58,6 +58,9 @@ final class BehaviorMonitor: ObservableObject {
         } progress: { [weak self] count in
             Task { @MainActor in self?.processesChecked = count }
         }
+        worker.onScript = { [weak self] path, detection in
+            Task { @MainActor in self?.quarantineScript(path, detection) }
+        }
         worker.start()
         self.worker = worker
         isRunning = true
@@ -140,6 +143,15 @@ final class BehaviorMonitor: ObservableObject {
 
         if done.isEmpty { return "Couldn't act safely, so it was only reported" }
         return done.joined(separator: ", ").capitalizedFirst
+    }
+
+    /// A script that an interpreter was running matched a malicious pattern rule.
+    private func quarantineScript(_ path: String, _ detection: Detection) {
+        guard Prefs.bool(Prefs.behaviorAutoStop), !isTrusted(path), BehaviorMonitor.mayQuarantine(path),
+              !vault.contains(path: path) else { return }
+        if (try? vault.quarantine(detection)) != nil {
+            Notifier.post("Malicious script quarantined", "\((path as NSString).lastPathComponent): \(detection.threatName).", critical: true)
+        }
     }
 
     /// Manual "Stop" button.
@@ -252,11 +264,14 @@ final class BehaviorWorker {
     private let queue = DispatchQueue(label: "agamemnon.behavior", qos: .utility)
     private var timer: DispatchSourceTimer?
     private let onReport: (Report) -> Void
+    /// A malicious script file found by the pattern rules, to be quarantined.
+    var onScript: (String, Detection) -> Void = { _, _ in }
     private let onProgress: (Int) -> Void
 
     // Only touched on `queue`.
     private var seen: Set<String> = []
     private var hashChecked: Set<String> = []
+    private var patternChecked: Set<String> = []
     private var reported: Set<String> = []
     private var cpuSamples: [String: (Date, Double)] = [:]
     private var busySince: [String: Date] = [:]
@@ -310,20 +325,49 @@ final class BehaviorWorker {
             hashChecked.insert(p.path)
             let size = ((try? FileManager.default.attributesOfItem(atPath: p.path))?[.size] as? NSNumber)?.int64Value ?? 0
             if size > 0, size < 256 * 1024 * 1024,
-               let hash = try? FileHasher.sha256(of: URL(fileURLWithPath: p.path)),
-               let name = SignatureStore.shared.lookup(hash), !name.hasPrefix("EICAR") {
+               let hit = KnownMalware.lookup(URL(fileURLWithPath: p.path)), hit.level != .test {
                 let finding = BehaviorFinding(rule: "known-malware", title: "Known malware is running",
-                                              explanation: "This program matches a known malware sample (\(name)).",
-                                              families: name, confidence: .high)
+                                              explanation: "This program matches a known malware sample (\(hit.name)).",
+                                              families: hit.name, confidence: hit.level == .malicious ? .high : .medium)
                 emit(p, finding, culprit: (p.path, p.pid))
                 return
             }
         }
 
-        // 2. Behaviour rules.
+        // 2. Pattern rules on the program, or on the script an interpreter is running.
+        if Prefs.bool(Prefs.patternRules), !BehaviorRules.isSystemPath(p.path) || BehaviorMonitor.interpreters.contains(p.name.lowercased()) {
+            for file in patternTargets(p) where !patternChecked.contains(file) {
+                patternChecked.insert(file)
+                if patternChecked.count > 20000 { patternChecked.removeAll() }
+                let url = URL(fileURLWithPath: file)
+                let size = ((try? FileManager.default.attributesOfItem(atPath: file))?[.size] as? NSNumber)?.int64Value ?? 0
+                guard let hit = PatternRules.assess(url, size: size, outer: url, inner: nil, container: nil),
+                      hit.level == .malicious else { continue }
+                let finding = BehaviorFinding(rule: "pattern", title: "Malware recognised by its code",
+                                              explanation: "This matches Agamemnon's pattern rule \(hit.threatName), written for a known Mac malware family.",
+                                              families: hit.threatName, confidence: .high)
+                let isScript = file != p.path
+                emit(p, finding, culprit: isScript ? nil : (p.path, p.pid))
+                if isScript { onScript(file, hit) }
+                return
+            }
+        }
+
+        // 3. Behaviour rules.
         let ancestors = ProcessList.ancestors(of: p)
         guard let finding = BehaviorRules.evaluate(p, ancestors: ancestors) else { return }
         emit(p, finding, culprit: responsible(for: p, ancestors: ancestors))
+    }
+
+    /// The program itself, or for interpreters (bash, python, node, osascript…) the script
+    /// files they were started with.
+    private func patternTargets(_ p: RunningProcess) -> [String] {
+        if !BehaviorMonitor.interpreters.contains(p.name.lowercased()) && !p.name.lowercased().hasPrefix("python") {
+            return [p.path]
+        }
+        return p.arguments.dropFirst().prefix(4).filter { arg in
+            arg.hasPrefix("/") && !BehaviorRules.isSystemPath(arg) && FileManager.default.isReadableFile(atPath: arg)
+        }
     }
 
     /// The nearest unsigned, user-installed program in the chain (the process itself or a parent).

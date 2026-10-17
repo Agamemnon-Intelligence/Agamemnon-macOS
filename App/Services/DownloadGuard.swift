@@ -145,7 +145,12 @@ final class DownloadGuard: ObservableObject {
         options.useClamAV = options.useClamAV && ArchiveInspector.kind(of: url) != nil
         let scanOptions = options
         queue.async { [weak self] in
-            let result = ScanEngine().run(roots: [url], options: scanOptions) { _ in }
+            var result = ScanEngine().run(roots: [url], options: scanOptions) { _ in }
+            // Where it came from: a link on URLhaus's list of live malware sites.
+            if Prefs.bool(Prefs.urlhausProtection), let source = URLhausStore.shared.assessDownload(url),
+               !result.detections.contains(where: { $0.level == .malicious }) {
+                result.detections.insert(source, at: 0)
+            }
             Task { @MainActor in self?.finish(event.id, url: url, result: result) }
         }
     }

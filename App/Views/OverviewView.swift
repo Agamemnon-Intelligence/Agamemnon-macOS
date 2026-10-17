@@ -158,7 +158,13 @@ struct OverviewView: View {
                 SectionTitle(text: "Scan engines")
                 engineRow("Agamemnon engine", signatures.count > 0 ? "Ready" : "Waiting for signatures",
                           signatures.count > 0 ? Theme.success : Theme.warning)
-                engineRow("ClamAV", model.clamAVReady ? "Ready" : (model.clamAVInstalled ? "Needs signatures" : "Not installed (optional)"),
+                engineRow("VirusShare hashes", signatures.virusShareCount > 0 ? "\(signatures.virusShareCount.formatted())" : (signatures.virusShareUpdating ? "Downloading…" : "Waiting"),
+                          signatures.virusShareCount > 0 ? Theme.success : Theme.textTertiary)
+                engineRow("Pattern rules", Prefs.bool(Prefs.patternRules) ? "On" : "Off",
+                          Prefs.bool(Prefs.patternRules) ? Theme.success : Theme.warning)
+                engineRow("Malware site list (URLhaus)", signatures.urlhausCount > 0 ? "\(signatures.urlhausCount.formatted()) links" : "Waiting",
+                          signatures.urlhausCount > 0 ? Theme.success : Theme.textTertiary)
+                engineRow("ClamAV", model.clamAVReady ? "Ready" : (model.clamAVInstalling ? "Installing…" : (model.clamAVInstalled ? "Needs signatures" : "Not installed")),
                           model.clamAVReady ? Theme.success : Theme.textTertiary)
                 engineRow("Archive & installer scanning", Prefs.bool(Prefs.scanArchives) ? "On" : "Off",
                           Prefs.bool(Prefs.scanArchives) ? Theme.success : Theme.warning)

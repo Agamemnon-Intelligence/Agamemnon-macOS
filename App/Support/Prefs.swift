@@ -17,6 +17,16 @@ enum Prefs {
     static let behaviorProtection = "behaviorProtection"
     static let behaviorAutoStop = "behaviorAutoStop"
     static let trustedPrograms = "trustedPrograms"
+    static let urlhausProtection = "urlhausProtection"
+    static let virusShare = "virusShare"
+    static let patternRules = "patternRules"
+    static let startupSweep = "startupSweep"
+    static let browserProtection = "browserProtection"
+    static let ransomwareShield = "ransomwareShield"
+    static let ransomwareFolders = "ransomwareFolders"
+    static let autoInstallClamAV = "autoInstallClamAV"
+    static let clamAVAutoInstallTried = "clamAVAutoInstallTried"
+    static let trustedExtensions = "trustedExtensions"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -31,6 +41,13 @@ enum Prefs {
             notifications: true,
             behaviorProtection: true,
             behaviorAutoStop: true,
+            urlhausProtection: true,
+            virusShare: true,
+            patternRules: true,
+            startupSweep: true,
+            browserProtection: true,
+            ransomwareShield: true,
+            autoInstallClamAV: true,
         ])
     }
 

@@ -77,19 +77,118 @@ struct Hash256: Hashable, Comparable {
     }
 }
 
+/// An MD5 digest as two big-endian words (VirusShare publishes MD5 lists).
+struct MD5Hash: Hashable, Comparable {
+    let hi: UInt64
+    let lo: UInt64
+
+    init(hi: UInt64, lo: UInt64) { self.hi = hi; self.lo = lo }
+
+    init?(bytes: [UInt8]) {
+        guard bytes.count == 16 else { return nil }
+        var h: UInt64 = 0, l: UInt64 = 0
+        for i in 0..<8 { h = (h << 8) | UInt64(bytes[i]) }
+        for i in 8..<16 { l = (l << 8) | UInt64(bytes[i]) }
+        self.init(hi: h, lo: l)
+    }
+
+    /// Parses 32 hex characters starting at `offset`.
+    init?(hexBytes p: UnsafeBufferPointer<UInt8>, offset: Int) {
+        guard offset + 32 <= p.count else { return nil }
+        var h: UInt64 = 0, l: UInt64 = 0
+        for i in 0..<16 {
+            guard let n = Hash256.nibble(p[offset + i]) else { return nil }
+            h = (h << 4) | UInt64(n)
+        }
+        for i in 16..<32 {
+            guard let n = Hash256.nibble(p[offset + i]) else { return nil }
+            l = (l << 4) | UInt64(n)
+        }
+        self.init(hi: h, lo: l)
+    }
+
+    var firstByte: UInt8 { UInt8(hi >> 56) }
+
+    /// MD5 of zero bytes (d41d8cd98f00b204e9800998ecf8427e).
+    static let empty = MD5Hash(hi: 0xd41d8cd98f00b204, lo: 0xe9800998ecf8427e)
+
+    var hex: String {
+        [hi, lo].map { w -> String in
+            let s = String(w, radix: 16)
+            return String(repeating: "0", count: 16 - s.count) + s
+        }.joined()
+    }
+
+    static func < (l: MD5Hash, r: MD5Hash) -> Bool { l.hi != r.hi ? l.hi < r.hi : l.lo < r.lo }
+}
+
 enum FileHasher {
     /// Streams the file through SHA-256 in 1 MB chunks.
     static func sha256(of url: URL) throws -> Hash256 {
+        try digests(of: url, md5: false).sha256
+    }
+
+    /// SHA-256 and (optionally) MD5 in one pass over the file.
+    static func digests(of url: URL, md5 wantMD5: Bool = true) throws -> (sha256: Hash256, md5: MD5Hash?) {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
-        var hasher = SHA256()
+        var sha = SHA256()
+        var md5 = Insecure.MD5()
         while true {
-            let chunk = try handle.read(upToCount: 1 << 20) ?? Data()
-            if chunk.isEmpty { break }
-            hasher.update(data: chunk)
+            // Release each 1 MB chunk straight away; otherwise they pile up until the
+            // whole scan loop finishes, which can use gigabytes on a full scan.
+            let done = try autoreleasepool { () -> Bool in
+                let chunk = try handle.read(upToCount: 1 << 20) ?? Data()
+                if chunk.isEmpty { return true }
+                sha.update(data: chunk)
+                if wantMD5 { md5.update(data: chunk) }
+                return false
+            }
+            if done { break }
         }
-        let digest = Array(hasher.finalize())
-        return Hash256(bytes: digest)!
+        let shaHash = Hash256(bytes: Array(sha.finalize()))!
+        return (shaHash, wantMD5 ? MD5Hash(bytes: Array(md5.finalize())) : nil)
+    }
+}
+
+/// One lookup against every known-malware list Agamemnon has: MalwareBazaar (SHA-256)
+/// and VirusShare (MD5).
+enum KnownMalware {
+    struct Hit {
+        let name: String
+        let sha256: String
+        let level: ThreatLevel
+    }
+
+    /// What VirusShare may judge. Its lists include harmless files that happened to sit inside
+    /// malware archives (fonts, "Credits.rtf", Python's Windows launcher stubs, library source
+    /// files…), so it's only used for Mac programs, and, as a warning, for installers and archives.
+    enum VirusShareScope { case program, archive }
+
+    static func virusShareScope(_ url: URL) -> VirusShareScope? {
+        let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        guard size >= 64 else { return nil }
+        // Programs only: scripts and source files (Ruby, Python, JavaScript libraries) often sat
+        // inside malware archives too, and are covered by the pattern rules and ClamAV.
+        if PatternRules.kind(of: url, size: size) == .program { return .program }
+        let archives: Set<String> = ["dmg", "pkg", "mpkg", "zip", "7z", "rar", "iso", "xar", "tar", "gz", "tgz"]
+        return archives.contains(url.pathExtension.lowercased()) ? .archive : nil
+    }
+
+    /// Checks a file against both lists.
+    static func lookup(_ url: URL) -> Hit? {
+        let scope = VirusShareStore.shared.count > 0 ? virusShareScope(url) : nil
+        guard let d = try? FileHasher.digests(of: url, md5: scope != nil) else { return nil }
+        if let name = SignatureStore.shared.lookup(d.sha256) {
+            return Hit(name: name, sha256: d.sha256.hex, level: name.hasPrefix("EICAR") ? .test : .malicious)
+        }
+        // VirusShare's lists include the MD5 of an empty file; never match on that.
+        if let scope, let md5 = d.md5, md5 != MD5Hash.empty, VirusShareStore.shared.contains(md5) {
+            let signed = !CodeIdentity.of(BehaviorMonitor.quarantineTarget(for: url.path)).isUnvouched
+            let level: ThreatLevel = scope == .program && !signed ? .malicious : .suspicious
+            return Hit(name: "Known malware (VirusShare \(md5.hex.prefix(12))…)", sha256: d.sha256.hex, level: level)
+        }
+        return nil
     }
 }
 

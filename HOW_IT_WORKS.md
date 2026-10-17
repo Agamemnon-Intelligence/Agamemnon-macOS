@@ -11,12 +11,16 @@ This document explains what Agamemnon does under the hood: how it finds malware,
 5. [The quarantine vault](#the-quarantine-vault)
 6. [Real-time protection](#real-time-protection)
    - [Behaviour protection](#behaviour-protection)
-7. [Encrypted DNS](#encrypted-dns)
-8. [Scheduled scans and running in the background](#scheduled-scans-and-running-in-the-background)
-9. [Where Agamemnon keeps its data](#where-agamemnon-keeps-its-data)
-10. [Permissions and privacy](#permissions-and-privacy)
-11. [Limits](#limits)
-12. [Code map](#code-map)
+   - [Ransomware shield](#ransomware-shield)
+   - [Browser protection](#browser-protection)
+   - [Startup items check](#startup-items-check)
+7. [Security Checkup](#security-checkup)
+8. [Encrypted DNS](#encrypted-dns)
+9. [Scheduled scans and running in the background](#scheduled-scans-and-running-in-the-background)
+10. [Where Agamemnon keeps its data](#where-agamemnon-keeps-its-data)
+11. [Permissions and privacy](#permissions-and-privacy)
+12. [Limits](#limits)
+13. [Code map](#code-map)
 
 ---
 
@@ -54,7 +58,7 @@ Every scan, whether you start it, the schedule starts it, or a new download trig
 
 ## Detection engines
 
-Agamemnon has three ways of deciding a file is dangerous. A file only needs to fail one of them.
+Agamemnon has five ways of deciding a file is dangerous: its hash list, Gatekeeper, ClamAV, its own pattern rules, and where the file came from (URLhaus). A file only needs to fail one of them.
 
 ### 1. Known-malware hashes (Agamemnon's own engine)
 
@@ -71,6 +75,16 @@ The hashes are stored in a compact binary file: each hash is 32 raw bytes, sorte
 Large files are read in 1 MB chunks, so even a 1 GB file is hashed without loading it all into memory. Files bigger than 1 GB aren't hashed, because malware samples are almost never that large.
 
 **The EICAR test file.** Every antivirus recognises EICAR, a harmless 68-byte text file made for testing. Agamemnon recognises it by its fingerprint and its contents, and reports it as a *Test file*. The **Run Test** button on the Real-Time Protection page saves one into your Downloads folder, so you can watch download protection catch it.
+
+### 1b. VirusShare (extra known-malware hashes)
+
+[VirusShare](https://virusshare.com/hashes) publishes the MD5 fingerprints of every malware sample in its collection as free numbered lists (500 lists, about 42 million hashes; mostly Windows malware, with Mac malware among them).
+
+- **Download:** in the background, list by list (`VirusShare_00000.md5` …), politely spaced, about 1.4 GB in total the first time. It resumes where it stopped after a restart. After that, Agamemnon looks for new lists once a week. Turn it off in Settings.
+- **Storage:** 256 sorted files in `Signatures/VirusShare/` (one per first byte of the hash, 16 bytes per hash, about 680 MB). New lists go into `.new` files and are sorted in every 50 lists, so protection grows during the first download.
+- **Lookup:** the MD5 is worked out in the same pass as the SHA-256, so files are only read once. The right bucket file is memory-mapped and binary-searched; the full list is never loaded into memory.
+- **What it judges:** VirusShare's lists also contain harmless files that happened to sit inside malware archives (fonts, the standard `Credits.rtf`, Python's Windows launcher stubs `cli-64.exe`/`w32.exe`, tiny packaging files). A test on a normal Mac found 14 of these (including a Ruby library file). So VirusShare is only used for **Mac programs** (Mach-O binaries) and **installers and archives** (DMG, PKG, ZIP…), and never for files under 64 bytes or the empty-file hash. Scripts are left to the pattern rules, MalwareBazaar and ClamAV.
+- **Results:** an unsigned program on the list is **malware**. A match on something signed by Apple or a Developer ID, or on an installer or archive, is only **suspicious**, so it's reported but never moved automatically.
 
 ### 2. Gatekeeper (Apple's own check)
 
@@ -98,9 +112,14 @@ Only the Gatekeeper warning is skipped. Hash and ClamAV checks still run on it.
 
 A suspicious item isn't necessarily malware: plenty of small open-source apps aren't notarized. That's why suspicious items are only flagged, unless you turn on **Quarantine apps Apple hasn't verified**.
 
-### 3. ClamAV (optional second opinion)
+### 3. ClamAV (second opinion)
 
-[ClamAV](https://www.clamav.net) is a free, open-source antivirus engine by Cisco Talos. Its signatures go far beyond exact hashes: patterns inside documents, scripts, email attachments and more. Agamemnon doesn't bundle ClamAV, but if you install it:
+[ClamAV](https://www.clamav.net) is a free, open-source antivirus engine by Cisco Talos. Its signatures go far beyond exact hashes: patterns inside documents, scripts, email attachments and more. Agamemnon doesn't bundle ClamAV. Instead, about 45 seconds after the first launch, it **installs it for you, once**:
+
+- **With Homebrew:** it runs `brew install clamav` as you. No password needed.
+- **Without Homebrew:** it finds the newest `*.macos.universal.pkg` on [ClamAV's GitHub releases](https://github.com/Cisco-Talos/clamav/releases), downloads it, and checks with `pkgutil --check-signature` that it's signed with Cisco's Apple Developer ID (team `DE8Y96K9QP`). Anything else is thrown away. Then macOS asks for your password once and `installer` puts ClamAV in `/usr/local/clamav`.
+
+If you cancel, **Install ClamAV** stays in Settings. You can also install it yourself:
 
 ```sh
 brew install clamav
@@ -114,6 +133,52 @@ then Agamemnon:
 ClamAV results are labelled by type: `PUA.*` (potentially unwanted apps) count as **Suspicious**, `Eicar` as a **Test file**, and everything else as **Malware**.
 
 ---
+
+### 4. Pattern rules (Agamemnon's own engine)
+
+Hashes only catch files someone has already reported. Pattern rules recognise a malware *family* by what its code contains, so a fresh build with a brand-new hash is still caught. They live in `PatternRules.swift`.
+
+A rule only looks at:
+
+- **scripts** (shell, `.command`, AppleScript, Python, JavaScript, Ruby, Perl, or anything starting with `#!`), up to 4 MB, and
+- **programs (Mach-O) that nobody has signed, or that are only ad-hoc signed**, up to 48 MB. Apple-signed and Developer ID-signed programs are skipped. A match there is much more likely to be a security tool, and Apple can revoke a real attacker's certificate.
+
+Each rule needs several strings together, never one word. For example, the password-phishing rule needs `display dialog` **and** `hidden answer` **and** two of the things stealers go after (browser logins, cookies, the keychain, Notes, wallets, `dscl -authonly`). Matching ignores upper and lower case.
+
+| Rule | What it recognises | Families | Result |
+| --- | --- | --- | --- |
+| `MacOS.Stealer.PasswordPhish` | A fake password dialog plus stealer targets | AMOS, Banshee, Cuckoo, FrigidStealer | Malware |
+| `MacOS.Stealer.BrowserData` | Three or more browsers' data folders, their login/cookie files, and a way to send them off | AMOS, Poseidon, Cthulhu | Malware |
+| `MacOS.Stealer.CryptoWallets` | Three or more crypto wallets or wallet extensions, and a way to send them off | AMOS, Banshee, Cuckoo, BeaverTail | Malware |
+| `MacOS.Stealer.SandboxEvasion` | Checking for QEMU/VMware/VirtualBox, plus stealer behaviour | AMOS, Banshee | Malware |
+| `MacOS.Stealer.KeychainDump` | `security dump-keychain` plus a network upload | KeySteal | Malware |
+| `MacOS.Stealer.Upload` | Uploading files from a temp folder with stolen-data names | AMOS, FrigidStealer | Malware |
+| `MacOS.Stealer.BeaverTail` | JavaScript reading two or more wallet extensions and its upload paths | BeaverTail | Malware |
+| `MacOS.Backdoor.SysJoker` | Its install folder and file name together | SysJoker | Malware |
+| `MacOS.Backdoor.ReverseShell` | A script handing a shell to `/dev/tcp/` | Backdoors | Malware |
+| `MacOS.Spyware.PrivacyTamper` | Writing new rows into the privacy database (TCC.db) | Spyware | Malware |
+| `MacOS.CoinMiner` | A mining-pool address plus miner settings | CoinMiner | Malware |
+| `MacOS.Dropper.Shlayer` | `openssl enc -base64 -d` into a temp folder, then running it | Shlayer | Malware |
+| `MacOS.Stealer.BrowserKey` | Asking the keychain for a browser's "Safe Storage" key plus a network call | KeySteal, AMOS | Suspicious |
+| `MacOS.Dropper.GatekeeperBypass` | A script that downloads into a temp folder, removes the quarantine flag and makes it runnable | Droppers, ClickFix | Suspicious |
+| `MacOS.Downloader.HiddenScript` | Decoding base64 and piping it into a shell | ClickFix, Bundlore | Suspicious |
+| `MacOS.Persistence.FakeAppleAgent` | A script writing a `com.apple.` LaunchAgent that runs from a temp or hidden folder | Backdoors | Suspicious |
+
+Pattern rules run in every scan (after the hash check), in download protection, in the startup items check, on browser extensions, and in behaviour protection (on each new unsigned program, and on the script file an interpreter such as `bash`, `python` or `osascript` is started with).
+
+To keep false alarms away, pattern rules skip:
+
+- files inside an app signed by Apple or a Developer ID (VS Code's bundled scripts, for example). The app's signature seals them, so macOS won't run the app if they're changed;
+- anything installed by a package manager (Homebrew, pyenv, nvm…);
+- Agamemnon's own program, in every version, because it contains the rules' strings. A copy of malware that pretends to be Agamemnon is still checked by hash, ClamAV and behaviour protection;
+- for the warning-level ("Suspicious") rules, scripts bigger than 256 KB. Droppers are tiny, and large bundles mention everything somewhere.
+
+### 5. URLhaus (malware sites)
+
+[URLhaus](https://urlhaus.abuse.ch) by abuse.ch is a public list of links that are spreading malware right now. Agamemnon downloads the "online" list (about 25,000 links, CC0, no key) every 6 hours and keeps it in `Signatures/urlhaus-online.txt`.
+
+- **Downloads:** browsers record where a file came from (`com.apple.metadata:kMDItemWhereFroms`). If that exact link is listed, or it came from a bare IP address that serves listed links, the download is **malware** and goes to quarantine. If it came from a site that's only *partly* listed, it's **suspicious**. Big shared sites (GitHub, Google Drive, Dropbox, Discord and others) are never judged by one bad link.
+- **Behaviour protection:** `curl` or `wget` fetching a listed link is stopped.
 
 ## Scans
 
@@ -243,6 +308,17 @@ About once a second, Agamemnon lists running processes with `proc_listallpids` a
 | Running a script straight from the internet | A shell running `curl … \| sh`, `$(curl …)` or `base64 -d \| sh` (official installers such as Homebrew and rustup are allowed) | AMOS "ClickFix", Shlayer, Bundlore | Medium |
 | Unsigned program in an odd place | An unsigned or ad-hoc program running from `/tmp`, `/Users/Shared` or a hidden folder in `~/Library` | SysJoker, Shlayer, Bundlore | Medium |
 | Hidden miner | An unsigned program keeping a CPU core over 85 % busy for 10 minutes | CoinMiner | Medium |
+| Downloading from a known malware site | `curl`/`wget` fetching a link on the URLhaus list | Droppers, ClickFix | High |
+| Copying crypto wallets or browser data | AppleScript naming two or more wallets / Telegram / keychain, or `cp`/`ditto`/`rsync`/`sqlite3` doing it when started by AppleScript or an unsigned program | AMOS, Banshee, Cuckoo, Poseidon | High |
+| Checking for a virtual machine | `system_profiler` output searched for QEMU/VMware/VirtualBox/Parallels | AMOS, Banshee, Cuckoo | High from AppleScript or an unsigned program, otherwise medium |
+| Secret screenshots | `screencapture -x` (no shutter sound) started by an unsigned program | Cuckoo, Poseidon, Banshee | High |
+| Packing up stolen files | `ditto -c -k` from one temp folder to another, started by AppleScript or an unsigned program | AMOS, Banshee, Cthulhu | High |
+| Switching off the download check | `xattr` removing `com.apple.quarantine` when started by an unsigned program, or on temp-folder files from AppleScript | Droppers, Shlayer, ClickFix | High (medium for a temp-folder file otherwise) |
+| Turning off Gatekeeper | `spctl --master-disable` / `--global-disable` | Shlayer, Bundlore | High from an unsigned program, otherwise medium |
+| Granting itself privacy permissions | `sqlite3` writing to `TCC.db` | Spyware, backdoors | High |
+| Remote control connection | A shell using `/dev/tcp/` with `-i` | Backdoors | High |
+| Hiding the Terminal window | AppleScript hiding or minimising Terminal | ClickFix, Cuckoo | Medium |
+| Malware recognised by its code | The new program, or the script an interpreter runs, matches a malicious pattern rule | Any covered family | High; a matching script is quarantined |
 
 **What happens next.** Medium findings are only reported: a notification, an entry in Recent Activity, and an alert on the Real-Time Protection page with **Stop**, **Quarantine** and **Trust** buttons. High findings are acted on automatically when **Stop dangerous programs automatically** is on (the default):
 
@@ -256,6 +332,64 @@ About once a second, Agamemnon lists running processes with `proc_listallpids` a
 - Agamemnon never touches itself, other users' processes or root processes.
 - Nothing is deleted. Quarantined programs can be restored from the Quarantine page.
 - **Trust** stops all alerts about a program. Trusted programs are listed on the Real-Time Protection page and can be removed there.
+
+### Ransomware shield
+
+Watches **Documents, Desktop and Pictures** (plus any folders you add) with FSEvents. When **25 or more files change within 15 seconds**, it takes a closer look:
+
+- **Do the files still match their type?** Up to 40 changed files are sampled and their first bytes checked: a `.jpg` must start like a JPEG, a `.pdf` with `%PDF`, Office files like a ZIP, text files must be mostly printable, and so on. If **60 %** or more of at least 8 checked files fail, they've most likely been encrypted.
+- **Were they renamed?** Ten or more files getting the same unknown extension after a known one (`photo.jpg.locked`).
+- **Ransom notes** (`HOW_TO_DECRYPT`, `_readme.txt`…) appearing while files are being scrambled.
+
+Then it finds the program doing it: it compares every user program's disk-write counter one second apart (`proc_pid_rusage`) and checks which ones have files open in the protected folders (`proc_pidinfo`). Apple-signed programs (Finder, Photos, iCloud) are never blamed. If the top writer is **unsigned or ad-hoc** and "Stop dangerous programs automatically" is on, it's stopped and quarantined. A signed program is only named in the alert.
+
+Normal work doesn't trigger it: copying, exporting or syncing files leaves them valid, so the type check passes. The shield acts within a few seconds, so some files may already be damaged; a Time Machine backup gets those back (the Security Checkup reminds you).
+
+### Browser protection
+
+Looks for adware (Adload, Bundlore, Pirrit, Shlayer's payloads) in every browser profile. It checks when Agamemnon starts, whenever an extension folder or a managed-preferences file changes, and every 30 minutes.
+
+- **Chrome, Brave, Edge, Vivaldi, Arc, Opera, Chromium:** reads each extension's `manifest.json`.
+  - An extension that changes the **search engine** to anything other than a well-known one (Google, Bing, DuckDuckGo, Ecosia…) is flagged.
+  - An extension that **didn't come from the official store** (no store `update_url`) and can read every website, use `webRequest`/`proxy`/`nativeMessaging`, or change the home page is flagged.
+  - Every file under 8 MB in an extension is hash-checked, and its JavaScript goes through the pattern rules. A match there is **malware** and is quarantined automatically.
+- **Forced installs:** JSON files in Chrome's `External Extensions` folders make Chrome install an extension. Ones pointing at the official store are fine (some apps add their own extension this way); ones pointing at a local file are flagged.
+- **Configuration profiles:** browser policies under `/Library/Managed Preferences` (forced extensions, search engine, home page, proxy) for Chrome, Brave, Edge and Safari, and Firefox's `policies.json`. Skipped on Macs enrolled in a company's device management (`profiles status -type enrollment`), where these are expected.
+- **Safari:** lists Safari extensions with `pluginkit` and flags ones inside an unsigned app, or an app hidden outside the Applications folders.
+
+Apart from malware matches, nothing is removed automatically. **Remove** moves the extension (or file) to quarantine; for a profile it opens System Settings › Device Management. **Trust** hides it for good.
+
+### Startup items check
+
+`BackgroundItemWatcher` only sees *new* startup items. The startup items check looks at **everything already there**: `~/Library/LaunchAgents`, `/Library/LaunchAgents`, `/Library/LaunchDaemons` and your `crontab`. It runs 20 seconds after launch, every 6 hours, and on **Check Now**. For each item it checks the program it runs, or the script when the program is an interpreter:
+
+| Finding | Result |
+| --- | --- |
+| The program is on the malware hash list | Malware |
+| It matches a pattern rule | That rule's result |
+| It calls itself `com.apple.…` but isn't signed by Apple | Malware if unsigned, otherwise suspicious |
+| It downloads or decodes code and runs it every time (`curl … \| sh`, `base64 -d`, `/dev/tcp/`) | Suspicious |
+| An unsigned program in a temp folder or a hidden folder in your home | Suspicious |
+
+Malware is stopped and moved to quarantine with its startup item when "Quarantine threats automatically" is on. Suspicious items wait for you (**Quarantine** or **Trust**).
+
+---
+
+## Security Checkup
+
+A page that checks the macOS settings that matter most, each with a **Fix…** button to the right System Settings page. Agamemnon only reads them and never changes them.
+
+| Check | How |
+| --- | --- |
+| macOS still supported | The version number: Apple fully patches the newest three releases |
+| Automatic security updates | `CriticalUpdateInstall` and `ConfigDataInstall` (XProtect) in `com.apple.SoftwareUpdate` |
+| FileVault | `fdesetup status` |
+| Firewall | `socketfilterfw --getglobalstate` |
+| Gatekeeper | `spctl --status` |
+| System Integrity Protection | `csrutil status` |
+| Password at login | No `autoLoginUser` in `com.apple.loginwindow` |
+| Remote Login (SSH) | Whether `com.openssh.sshd` is loaded |
+| Time Machine | `tmutil destinationinfo` |
 
 ---
 
@@ -307,7 +441,7 @@ To remove Agamemnon completely: quit it, delete the app, delete `~/Library/Appli
 ## Permissions and privacy
 
 - **No account, no telemetry, no uploads.** Your files never leave your Mac. Only fingerprints are compared, and only against a list stored on your Mac.
-- **Network use:** downloading the MalwareBazaar hash list, ClamAV signatures (if installed), and creators' profile pictures on the About page. Nothing else.
+- **Network use:** downloading the MalwareBazaar hash list, VirusShare's MD5 lists, the URLhaus malware-link list, ClamAV itself (once, from Homebrew or ClamAV's GitHub releases) and its signatures, and creators' profile pictures on the About page. Nothing else.
 - **Not sandboxed.** An antivirus has to read the whole disk and run system tools, which Apple's App Sandbox doesn't allow. The app runs with **Hardened Runtime**.
 - **Full Disk Access** is optional but recommended for full scans. Agamemnon only reads files with it, and never changes them, except to quarantine a threat.
 - **Administrator password:** only asked for when quarantining or restoring something in a protected location, or when turning encrypted DNS off. Never for scanning.
@@ -318,12 +452,16 @@ To remove Agamemnon completely: quit it, delete the app, delete `~/Library/Appli
 
 No antivirus catches everything. Agamemnon is honest about what it can and can't do:
 
-- **Hash matching only catches known files.** Brand-new or slightly altered malware has a fingerprint nobody has seen yet. Installing ClamAV adds pattern-based detection, but neither engine replaces keeping macOS up to date. macOS also has its own built-in protection, XProtect.
+- **Hash matching only catches known files.** Brand-new or slightly altered malware has a fingerprint nobody has seen yet. Pattern rules and ClamAV catch many new builds of known families, but heavily obfuscated or completely new malware can get past all of them. Keep macOS up to date: it has its own protection, XProtect.
+- **Pattern rules skip signed programs.** A family that ships Developer ID-signed builds is only caught by hash, ClamAV or behaviour until Apple revokes the certificate.
+- **The ransomware shield reacts, it doesn't prevent.** It needs a burst of damaged files to recognise an attack, and it can only stop programs that aren't signed. Keep a backup.
+- **Browser protection is a review list, not a blocklist.** Apart from extensions containing malware, it flags and you decide.
 - **Behaviour protection reacts just after a program starts, not before.** It checks new processes about once a second, so a program that starts and finishes within a second can be missed, and it can't see which files a program opens. Blocking programs before they run, and watching file access, both need Apple's Endpoint Security entitlement.
 - **Download protection reacts after the download finishes.** It usually acts within about 2 seconds. Truly blocking a file *before* any app can open it needs Apple's Endpoint Security entitlement, which this version doesn't have.
 - **Encrypted DNS needs your approval** in System Settings. A VPN's own DNS settings override it while the VPN is connected.
 - **Admin alerts need an admin account** and depend on macOS's log messages. Apple can change those messages between versions.
 - **Password-protected and very large archives** can't be looked inside. They're listed after the scan so you know.
+- **Files that are only in iCloud Drive or another cloud drive** (not downloaded to this Mac) are skipped. Reading them would make macOS download them, so Agamemnon checks them once they're on the Mac.
 
 ---
 
@@ -340,16 +478,23 @@ App/
 │   ├── CodeIdentity.swift      Who signed a program; recognising Agamemnon's own builds
 │   ├── ProcessList.swift       Running processes via libproc / sysctl
 │   ├── BehaviorRules.swift     What stealers, backdoors and miners do
-│   ├── ClamAV.swift            Finds clamscan, runs freshclam and clamscan
+│   ├── PatternRules.swift      Malware families recognised by their code
+│   ├── URLhaus.swift           Live malware-link list, where downloads came from
+│   ├── VirusShare.swift        VirusShare MD5 lists: download, bucketed storage, lookup
+│   ├── ClamAV.swift            Installs ClamAV, runs freshclam and clamscan
 │   └── Models.swift            Detection, ScanKind, ScanSummary…
 ├── Services/
 │   ├── AppModel.swift          Owns every service, works out overall status
 │   ├── ScanController.swift    Starts/stops scans, auto-quarantine, summaries
-│   ├── SignatureManager.swift  Downloads and merges MalwareBazaar hashes
+│   ├── SignatureManager.swift  Downloads MalwareBazaar hashes and the URLhaus list
 │   ├── QuarantineVault.swift   Quarantine, restore, delete
 │   ├── DownloadGuard.swift     Download protection
 │   ├── SystemWatchers.swift    Admin access alerts + background item alerts
 │   ├── BehaviorMonitor.swift   Behaviour protection and its guardrails
+│   ├── RansomwareShield.swift  Encryption-burst detection in protected folders
+│   ├── BrowserGuard.swift      Adware extensions, search hijacks, browser policies
+│   ├── StartupSweep.swift      Checks every existing startup item
+│   ├── SecurityCheckup.swift   FileVault, firewall, Gatekeeper, updates…
 │   ├── DNSManager.swift        Providers, profile generation, status
 │   ├── ScanScheduler.swift     Scheduled scans + open at login
 │   └── ActivityLog.swift       Recent activity + notifications

@@ -10,6 +10,8 @@ final class ScanEngine {
         var scanArchives = true
         var useClamAV = true
         var gatekeeperCheck = false
+        /// Agamemnon's built-in pattern rules for scripts and unsigned programs.
+        var patternRules = true
         var exclusions: [String] = []
         /// Files bigger than this aren't hashed (malware samples are rarely huge).
         var maxHashBytes: Int64 = 1024 * 1024 * 1024
@@ -132,8 +134,17 @@ final class ScanEngine {
         return false
     }
 
+    /// A file or folder that only exists in the cloud (the "dataless" flag set by iCloud Drive
+    /// and File Provider apps). Checked with lstat, which never triggers a download.
+    static func isCloudPlaceholder(_ path: String) -> Bool {
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return false }
+        return st.st_flags & UInt32(SF_DATALESS) != 0
+    }
+
     private func walk(_ root: URL, depth: Int, container: URL?, extractionRoot: URL?, innerBase: String?) {
         if isCancelled { return }
+        if ScanEngine.isCloudPlaceholder(root.path) { return }
         if container == nil && isExcluded(root.path) { return }
 
         var isDir: ObjCBool = false
@@ -157,6 +168,12 @@ final class ScanEngine {
                 enumerator.skipDescendants()
                 continue
             }
+            // iCloud Drive / Google Drive items that aren't downloaded: reading them would make
+            // macOS fetch them from the cloud (and can hang waiting for the network).
+            if ScanEngine.isCloudPlaceholder(url.path) {
+                enumerator.skipDescendants()
+                continue
+            }
             guard let values = try? url.resourceValues(forKeys: keySet) else { continue }
             if values.isSymbolicLink == true { continue }
             if values.isDirectory == true {
@@ -166,8 +183,12 @@ final class ScanEngine {
                 continue
             }
             if values.isRegularFile == true {
-                scanFile(url, size: Int64(values.fileSize ?? 0), depth: depth,
-                         container: container, extractionRoot: extractionRoot, innerBase: innerBase)
+                // Free each file's temporary buffers before the next one (a full scan visits
+                // hundreds of thousands of files in this one loop).
+                autoreleasepool {
+                    scanFile(url, size: Int64(values.fileSize ?? 0), depth: depth,
+                             container: container, extractionRoot: extractionRoot, innerBase: innerBase)
+                }
             }
         }
     }
@@ -198,13 +219,17 @@ final class ScanEngine {
             return
         }
 
-        if size <= options.maxHashBytes, let hash = try? FileHasher.sha256(of: url) {
-            if let name = signatures.lookup(hash) {
-                let level: ThreatLevel = name.hasPrefix("EICAR") ? .test : .malicious
-                add(Detection(fileURL: outer, innerPath: inner, threatName: name,
-                              engine: "Agamemnon", level: level, sha256: hash.hex))
-                return
-            }
+        if size <= options.maxHashBytes, let hit = KnownMalware.lookup(url) {
+            add(Detection(fileURL: outer, innerPath: inner, threatName: hit.name,
+                          engine: hit.name.contains("VirusShare") ? "VirusShare" : "Agamemnon",
+                          level: hit.level, sha256: hit.sha256))
+            return
+        }
+
+        if options.patternRules,
+           let hit = PatternRules.assess(url, size: size, outer: outer, inner: inner, container: container) {
+            add(hit)
+            return
         }
 
         if options.gatekeeperCheck, depth <= 1, ["pkg", "mpkg"].contains(url.pathExtension.lowercased()) {

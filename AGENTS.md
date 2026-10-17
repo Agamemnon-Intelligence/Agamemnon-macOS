@@ -18,11 +18,13 @@ Read [HOW_IT_WORKS.md](HOW_IT_WORKS.md) before changing detection, quarantine, r
 App/
 ├── AgamemnonApp.swift      Entry point: main Window + MenuBarExtra, AppDelegate
 ├── Engine/                 Detection, no UI: Signatures, ScanEngine, ArchiveInspector,
-│                           Gatekeeper, ClamAV, Models
+│                           Gatekeeper, ClamAV, PatternRules, URLhaus, BehaviorRules,
+│                           CodeIdentity, ProcessList, Models
 ├── Services/               @MainActor ObservableObjects: AppModel (owns everything),
 │                           ScanController, SignatureManager, QuarantineVault,
-│                           DownloadGuard, SystemWatchers, DNSManager, ScanScheduler,
-│                           ActivityLog
+│                           DownloadGuard, SystemWatchers, BehaviorMonitor,
+│                           RansomwareShield, BrowserGuard, StartupSweep,
+│                           SecurityCheckup, DNSManager, ScanScheduler, ActivityLog
 ├── Support/                Shell/LineProcess, FolderWatcher (FSEvents), AppPaths,
 │                           Prefs, Privileged (admin prompt)
 ├── Views/                  SwiftUI pages + Theme.swift (colours, glass, components)
@@ -86,17 +88,18 @@ xcodebuild -project Agamemnon.xcodeproj -scheme Agamemnon -configuration Debug b
 This is security software. A bug can delete user files or let malware through. Follow these rules.
 
 1. **Never delete user files directly.** Threats are *moved* to the quarantine vault (`QuarantineVault.quarantine`). Only the user deletes them for good.
-2. **Behaviour protection must never turn on the user.** Only high-confidence `BehaviorRules` findings are acted on automatically. Never stop or quarantine Apple-signed, Developer ID-signed, package-manager-installed or interpreter programs automatically (see the guardrails in `BehaviorMonitor`). New rules must be narrow. Test them against a normal developer Mac for false alarms before shipping.
+2. **Behaviour protection, pattern rules, the ransomware shield and the startup items check must never turn on the user.** Only high-confidence `BehaviorRules` findings are acted on automatically. Never stop or quarantine Apple-signed, Developer ID-signed, package-manager-installed or interpreter programs automatically (see the guardrails in `BehaviorMonitor`). New rules must be narrow: pattern rules need several strings together, and they never apply to Apple- or Developer ID-signed programs. Browser findings and odd-looking startup items are warnings only; only hash-list or malicious pattern-rule matches are acted on automatically. Test new rules against a normal developer Mac for false alarms before shipping.
 3. **Suspicious ≠ malicious.** Gatekeeper findings (unsigned or un-notarized) and ClamAV `PUA.*` hits are `.suspicious`. They are never auto-quarantined unless the user turns on that setting.
 4. **Keep the archive safety limits** in `ArchiveInspector`: list before extracting, a 4 GB expanded-size cap, 100,000 entries, 3 levels of nesting, timeouts, read-only `-nobrowse` disk image mounts, skipping encrypted images and archives instead of prompting, and always cleaning up scratch folders and detaching images. Don't loosen these without a clear reason in the PR.
 5. **Never execute, open or `Process`-launch a file being scanned.** Only read it, hash it, or hand it to the unpack and assessment tools.
 6. **Admin rights** go only through `Privileged.run`, only for quarantine or restore in protected locations and for removing the DNS profile. Shell-quote every path with `Shell.quote`.
 7. **Privacy:**
    - No telemetry, analytics, crash reporters or file uploads.
-   - The only network calls are the MalwareBazaar exports, ClamAV's `freshclam`, and the GitHub avatars on the About page. Don't add more without discussing it.
+   - The only network calls are the MalwareBazaar exports, VirusShare's MD5 lists (`virusshare.com/hashfiles/VirusShare_NNNNN.md5`, spaced out, resuming), the URLhaus `text_online` list, installing ClamAV once (Homebrew, or the latest `*.macos.universal.pkg` from ClamAV's GitHub releases, which must pass `pkgutil --check-signature` as Cisco's Developer ID), ClamAV's `freshclam`, and the GitHub avatars on the About page. Don't add more without discussing it.
 8. **Signature data:**
    - The MalwareBazaar exports at `https://bazaar.abuse.ch/export/txt/sha256/{full,recent}/` are CC0 and work without an auth key. The newer `mb-api.abuse.ch/v2` exports need a key, so don't switch to them silently.
    - Keep the binary format: sorted 32-byte records. Loading it and doing lookups depend on that format.
+   - VirusShare hashes are MD5 and live separately in `Signatures/VirusShare/`: 256 sorted bucket files of 16-byte records, memory-mapped for lookups. Never load the whole list into memory.
 9. **Don't overstate protection** in the UI or docs. Known limits are listed in HOW_IT_WORKS.md: hash matching only catches known samples, download protection acts just after the download finishes rather than blocking it, encrypted DNS needs the user's approval, and admin alerts need an admin account.
 10. **Never add or commit real malware samples.** For testing, use the EICAR test file (`Eicar.signature`).
 
@@ -107,6 +110,9 @@ There's no automated test target yet. Before handing work back:
 - **Detection:** scan a folder containing an EICAR file and a ZIP/DMG holding one. The scan should report it, with an inner path like `outer ▸ inner`.
 - **Download protection:** use **Run Test** on the Real-Time Protection page. The file should be quarantined within a few seconds.
 - **Quarantine:** quarantine, restore (check the file's permissions come back), delete.
+- **Pattern rules:** use harmless dummy scripts that contain a rule's strings (never real malware) in a temp folder, and check a scan flags them. Then scan `/Applications`, `/opt/homebrew` and your home folder for false alarms.
+- **Ransomware shield:** in a scratch folder added as a protected folder, have an unsigned test program overwrite 30+ dummy `.txt`/`.jpg` files with random bytes. It should be stopped and quarantined. Copying a folder of valid photos must not trigger it.
+- **Browser protection and startup items check:** look at the findings on a normal Mac first; there should be none or only real oddities.
 - **UI:** check on macOS 26 (glass) and, if you can, on macOS 13 to 15 (fallback).
 - If you couldn't run something, say exactly what wasn't verified.
 

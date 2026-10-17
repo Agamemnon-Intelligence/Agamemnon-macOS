@@ -55,6 +55,7 @@ final class ScanController: ObservableObject {
         var o = ScanEngine.Options()
         o.scanArchives = Prefs.bool(Prefs.scanArchives)
         o.useClamAV = Prefs.bool(Prefs.useClamAV)
+        o.patternRules = Prefs.bool(Prefs.patternRules)
         o.exclusions = Prefs.exclusionList
         if kind == .full { o.exclusions += ScanEngine.fullScanExclusions }
         o.gatekeeperCheck = kind == .download

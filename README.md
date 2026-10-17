@@ -21,6 +21,14 @@
 - **Download protection.** New files in Downloads (and any other folders you add) are checked as soon as the download finishes. Dangerous files are quarantined, and apps Apple hasn't notarized are flagged.
 - **Administrator access alerts.** Warns you when an app asks for your admin password.
 - **Background item alerts.** Warns you when something installs a LaunchAgent or LaunchDaemon so it starts automatically, then scans it.
+- **Behaviour protection.** Stops Mac stealers, backdoors and miners as they run: fake password prompts, keychain, wallet and browser-data theft, secret screenshots, switching off macOS's download check, and downloads from known malware sites.
+- **Pattern rules.** Recognises Mac malware families (AMOS, Banshee, Cuckoo, Poseidon, SysJoker, Shlayer, BeaverTail, miners…) by their code, so new builds are caught before anyone has listed them.
+- **VirusShare hashes.** About 42 million extra malware fingerprints from VirusShare.com, downloaded in the background and checked in the same pass.
+- **Malware site list.** Downloads are checked against URLhaus by abuse.ch, a live list of links spreading malware.
+- **Ransomware shield.** Watches Documents, Desktop and Pictures for files being scrambled, then stops the program doing it.
+- **Browser protection.** Finds adware extensions, search-engine hijacks and profiles that take over Safari, Chrome, Brave, Edge, Firefox and others.
+- **Startup items check** of everything that starts with your Mac, and a **Security Checkup** of FileVault, firewall, Gatekeeper, updates and backups.
+- **ClamAV built in.** Agamemnon installs Cisco's free ClamAV engine for you as a second opinion.
 - **Menu bar status icon**, dark midnight theme, and a Credits page.
 
 A Windows version also exists and is in active development. See [Agamemnon for Windows](#agamemnon-for-windows).
@@ -32,8 +40,11 @@ For the full details (scans, quarantine, real-time protection, DNS, privacy and 
 | Engine | What it checks |
 | --- | --- |
 | Agamemnon | SHA-256 of every file against the [MalwareBazaar](https://bazaar.abuse.ch) list of more than 1 million known-malware hashes (downloaded on first launch and updated twice a day), plus the EICAR test file. |
+| VirusShare | MD5 of every file (worked out in the same pass) against [VirusShare](https://virusshare.com/hashes)'s ~42 million malware hashes. |
 | Gatekeeper | Asks macOS whether downloaded apps and installers are signed and notarized. Revoked developer certificates count as malware. |
-| ClamAV *(optional)* | If you `brew install clamav`, Agamemnon keeps its own ClamAV signatures up to date and runs `clamscan` as a second opinion. |
+| Pattern rules | Tell-tale code and strings of Mac malware families in scripts and unsigned programs. |
+| URLhaus | Where a download came from, against [URLhaus](https://urlhaus.abuse.ch)'s live list of malware links. |
+| ClamAV | Installed for you (Homebrew, or Cisco's signed installer). Agamemnon keeps its own ClamAV signatures up to date and runs `clamscan` as a second opinion. |
 
 Archives are opened with tools that ship with macOS (`bsdtar`, `hdiutil`, `pkgutil`), in a private temporary folder. Disk images are mounted read-only and hidden from Finder.
 
@@ -78,7 +89,7 @@ It's still in development. Downloads, build instructions and issues for the Wind
 
 Created by [mirazbakis](https://github.com/mirazbakis) and [mertyesileducation](https://github.com/mertyesileducation).
 
-Malware hashes come from MalwareBazaar by abuse.ch. The optional second engine is ClamAV by Cisco Talos. The emblem is built around *The Sacrifice of Iphigenia* by Giovanni Battista Tiepolo, which is in the public domain.
+Malware hashes come from MalwareBazaar (abuse.ch) and VirusShare, and malware links from URLhaus (abuse.ch). The second engine is ClamAV by Cisco Talos. The emblem is built around *The Sacrifice of Iphigenia* by Giovanni Battista Tiepolo, which is in the public domain.
 
 ## License
 

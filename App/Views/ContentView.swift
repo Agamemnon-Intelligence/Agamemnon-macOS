@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview, scan, quarantine, protection, dns, schedule, settings, about
+    case overview, scan, quarantine, protection, checkup, dns, schedule, settings, about
 
     var id: String { rawValue }
 
@@ -11,6 +11,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .scan: return "Scan"
         case .quarantine: return "Quarantine"
         case .protection: return "Real-Time Protection"
+        case .checkup: return "Security Checkup"
         case .dns: return "Encrypted DNS"
         case .schedule: return "Scheduled Scans"
         case .settings: return "Settings"
@@ -24,6 +25,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .scan: return "magnifyingglass"
         case .quarantine: return "archivebox"
         case .protection: return "bolt.shield"
+        case .checkup: return "checklist"
         case .dns: return "network.badge.shield.half.filled"
         case .schedule: return "calendar.badge.clock"
         case .settings: return "gearshape"
@@ -65,6 +67,7 @@ struct ContentView: View {
         case .scan: ScanView()
         case .quarantine: QuarantineView()
         case .protection: ProtectionView()
+        case .checkup: SecurityCheckupView()
         case .dns: DNSView()
         case .schedule: ScheduleView()
         case .settings: SettingsView()
@@ -100,7 +103,7 @@ struct Sidebar: View {
                 ForEach([AppSection.overview, .scan, .quarantine]) { row($0) }
             }
             Section("Protection") {
-                ForEach([AppSection.protection, .dns, .schedule]) { row($0) }
+                ForEach([AppSection.protection, .checkup, .dns, .schedule]) { row($0) }
             }
             Section {
                 ForEach([AppSection.settings, .about]) { row($0) }

@@ -6,8 +6,16 @@ import Foundation
 final class ClamAV {
     static let shared = ClamAV()
 
-    var clamscanPath: String? { Shell.which("clamscan") }
-    var freshclamPath: String? { Shell.which("freshclam") }
+    /// Where Cisco's official macOS installer puts the tools.
+    static let pkgBinDir = "/usr/local/clamav/bin"
+
+    var clamscanPath: String? { Shell.which("clamscan") ?? ClamAV.tool("clamscan") }
+    var freshclamPath: String? { Shell.which("freshclam") ?? ClamAV.tool("freshclam") }
+
+    private static func tool(_ name: String) -> String? {
+        let path = pkgBinDir + "/" + name
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
     var isInstalled: Bool { clamscanPath != nil }
 
     /// Agamemnon's own database folder.
@@ -51,10 +59,75 @@ final class ClamAV {
             .max()
     }
 
+    // MARK: - Installing
+
+    enum InstallStep {
+        /// Installed with Homebrew; nothing else to do.
+        case done
+        /// Cisco's signed installer is downloaded and verified; it needs an admin password.
+        case needsPassword(pkg: URL)
+        case failed(String)
+    }
+
+    /// Installs ClamAV without asking anything if Homebrew is there; otherwise downloads and
+    /// verifies Cisco's official signed installer package.
+    func prepareInstall() async -> InstallStep {
+        if let brew = Shell.which("brew") {
+            let r = Shell.run(brew, ["install", "clamav"], timeout: 1800,
+                              environment: ["HOMEBREW_NO_AUTO_UPDATE": "1", "HOMEBREW_NO_INSTALL_CLEANUP": "1",
+                                            "HOMEBREW_NO_ENV_HINTS": "1"])
+            if isInstalled { return .done }
+            return .failed("Homebrew couldn't install ClamAV: " + String((r.stderr + r.stdout).suffix(200)))
+        }
+        do {
+            let pkg = try await ClamAV.downloadOfficialPackage()
+            return .needsPassword(pkg: pkg)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    struct InstallError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    /// Finds the newest macOS package on ClamAV's GitHub releases, downloads it and checks
+    /// that it's signed by Cisco with an Apple Developer ID.
+    static func downloadOfficialPackage() async throws -> URL {
+        var request = URLRequest(url: URL(string: "https://api.github.com/repos/Cisco-Talos/clamav/releases/latest")!)
+        request.setValue("Agamemnon/1.0 (macOS antivirus)", forHTTPHeaderField: "User-Agent")
+        let (data, _) = try await URLSession.shared.data(for: request)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let assets = json["assets"] as? [[String: Any]],
+              let asset = assets.first(where: { ($0["name"] as? String ?? "").hasSuffix(".macos.universal.pkg") }),
+              let link = asset["browser_download_url"] as? String,
+              link.hasPrefix("https://github.com/Cisco-Talos/clamav/releases/download/"),
+              let url = URL(string: link) else {
+            throw InstallError(message: "Couldn't find ClamAV's macOS installer.")
+        }
+        var download = URLRequest(url: url)
+        download.timeoutInterval = 900
+        let (tmp, _) = try await URLSession.shared.download(for: download)
+        let dir = AppPaths.newScratchDirectory("clamav-install")
+        let pkg = dir.appendingPathComponent(url.lastPathComponent)
+        try FileManager.default.moveItem(at: tmp, to: pkg)
+
+        let check = Shell.run("/usr/sbin/pkgutil", ["--check-signature", pkg.path], timeout: 60)
+        let text = check.stdout.lowercased()
+        // Cisco's Apple team ID, so a package signed by anyone else is refused.
+        guard check.succeeded, text.contains("developer id installer: cisco (de8y96k9qp)"),
+              text.contains("signed by a developer certificate issued by apple") else {
+            try? FileManager.default.removeItem(at: dir)
+            throw InstallError(message: "The ClamAV installer wasn't signed by Cisco, so it wasn't used.")
+        }
+        return pkg
+    }
+
     /// Downloads / refreshes the ClamAV signatures into Agamemnon's folder.
     func updateDatabase() -> ShellResult {
         guard let freshclam = freshclamPath else {
-            return ShellResult(status: -1, stdout: "", stderr: "freshclam isn't installed. Run: brew install clamav", timedOut: false)
+            return ShellResult(status: -1, stdout: "", stderr: "ClamAV isn't installed yet.", timedOut: false)
         }
         // freshclam insists on a config file; a one-line one is enough.
         let conf = ownDatabaseDir.appendingPathComponent("freshclam.conf")

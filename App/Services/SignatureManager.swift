@@ -17,6 +17,14 @@ final class SignatureManager: ObservableObject {
     @Published private(set) var isUpdating = false
     @Published private(set) var status = ""
     @Published private(set) var lastError: String?
+    @Published private(set) var urlhausCount = 0
+    @Published private(set) var urlhausUpdated: Date?
+    @Published private(set) var virusShareCount = VirusShareStore.shared.count
+    @Published private(set) var virusShareStatus = ""
+    @Published private(set) var virusShareUpdating = false
+
+    private let urlhausUpdatedKey = "urlhaus.lastUpdated"
+    private var urlhausUpdating = false
 
     private let store = SignatureStore.shared
     private let lastUpdatedKey = "signatures.lastUpdated"
@@ -25,15 +33,17 @@ final class SignatureManager: ObservableObject {
 
     init() {
         lastUpdated = UserDefaults.standard.object(forKey: lastUpdatedKey) as? Date
+        urlhausUpdated = UserDefaults.standard.object(forKey: urlhausUpdatedKey) as? Date
     }
 
-    var totalCount: Int { count + SignatureStore.builtIn.count }
+    var totalCount: Int { count + SignatureStore.builtIn.count + virusShareCount }
 
     func start() {
         Task {
             let store = self.store
             let loaded = await Task.detached(priority: .userInitiated) { store.loadFromDisk() }.value
             self.count = loaded
+            self.urlhausCount = await Task.detached(priority: .utility) { URLhausStore.shared.loadFromDisk() }.value
             self.autoUpdateIfNeeded()
         }
         timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
@@ -42,6 +52,8 @@ final class SignatureManager: ObservableObject {
     }
 
     private func autoUpdateIfNeeded() {
+        updateURLhausIfNeeded()
+        updateVirusShareIfNeeded()
         guard Prefs.bool(Prefs.autoUpdateSignatures) || count == 0 else { return }
         if let last = lastUpdated, Date().timeIntervalSince(last) < 12 * 3600, count > 0 { return }
         update()
@@ -90,6 +102,73 @@ final class SignatureManager: ObservableObject {
                 self.status = ""
             }
             self.isUpdating = false
+        }
+    }
+
+    // MARK: - VirusShare (MD5 lists)
+
+    private func updateVirusShareIfNeeded() {
+        guard Prefs.bool(Prefs.virusShare), !virusShareUpdating else { return }
+        let store = VirusShareStore.shared
+        // Keep going until the first download is complete; after that, look for new lists weekly.
+        if let last = store.state.lastChecked, Date().timeIntervalSince(last) < 7 * 86400, store.count > 0 { return }
+        updateVirusShare()
+    }
+
+    func updateVirusShare() {
+        guard !virusShareUpdating else { return }
+        virusShareUpdating = true
+        virusShareStatus = "Downloading VirusShare's malware lists…"
+        let before = VirusShareStore.shared.count
+        Task {
+            do {
+                let result = try await VirusShareStore.shared.update(progress: { done, next in
+                    Task { @MainActor in
+                        self.virusShareStatus = "Downloading VirusShare's malware lists… \(next) of about 500"
+                        self.virusShareCount = VirusShareStore.shared.count
+                    }
+                }, shouldStop: { !Prefs.bool(Prefs.virusShare) })
+                self.virusShareCount = result.total
+                self.virusShareStatus = ""
+                if result.total > before {
+                    ActivityLog.shared.add(.update, "VirusShare hashes updated",
+                                           "\((result.total - before).formatted()) new · \(result.total.formatted()) total")
+                }
+            } catch {
+                self.virusShareStatus = "VirusShare download paused: \(error.localizedDescription) It will continue later."
+            }
+            self.virusShareCount = VirusShareStore.shared.count
+            self.virusShareUpdating = false
+        }
+    }
+
+    // MARK: - URLhaus (malware links)
+
+    private func updateURLhausIfNeeded() {
+        guard Prefs.bool(Prefs.urlhausProtection), !urlhausUpdating else { return }
+        if let last = urlhausUpdated, Date().timeIntervalSince(last) < 6 * 3600, urlhausCount > 0 { return }
+        updateURLhaus()
+    }
+
+    func updateURLhaus() {
+        guard !urlhausUpdating else { return }
+        urlhausUpdating = true
+        Task {
+            do {
+                let lines = try await URLhausStore.download()
+                let count = await Task.detached(priority: .utility) { () -> Int in
+                    URLhausStore.shared.replace(with: lines)
+                    return URLhausStore.shared.count
+                }.value
+                self.urlhausCount = count
+                let now = Date()
+                self.urlhausUpdated = now
+                UserDefaults.standard.set(now, forKey: self.urlhausUpdatedKey)
+                ActivityLog.shared.add(.update, "Malware link list updated", "\(count.formatted()) live malware links from URLhaus")
+            } catch {
+                ActivityLog.shared.add(.info, "Couldn't update the malware link list", error.localizedDescription)
+            }
+            self.urlhausUpdating = false
         }
     }
 
