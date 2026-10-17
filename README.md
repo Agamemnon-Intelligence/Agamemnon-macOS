@@ -1,26 +1,20 @@
-<p align="center">
-  <img src="docs/icon.png" width="160" alt="Agamemnon icon">
-</p>
+<div align="center">
 
-<h1 align="center">Agamemnon</h1>
+<img src="docs/icon.png" alt="Agamemnon" width="120" />
 
-<p align="center"><b>Free, open-source antivirus for macOS.</b><br>
-Behaviour protection, pattern rules, a ransomware shield and 43 million known-malware fingerprints, in one quiet menu bar app.</p>
+# Agamemnon
 
-<p align="center">
-  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Agamemnon-Intelligence/Agamemnon-macOS?label=release&color=1b3474" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv2-blue" alt="GPLv2"></a>
-  <img src="https://img.shields.io/badge/macOS-13%2B-0b1430" alt="macOS 13+">
-  <img src="https://img.shields.io/badge/Apple%20silicon%20%26%20Intel-universal-1b3474" alt="Universal">
-  <a href="https://github.com/Agamemnon-Intelligence/Agamemnon-windows"><img src="https://img.shields.io/badge/also%20on-Windows-0078D4" alt="Windows version"></a>
-</p>
+**Free, open-source antivirus for macOS. Behaviour protection, pattern rules, a ransomware shield and 43 million known-malware fingerprints, in one quiet menu bar app.**
 
-<p align="center">
-  <a href="../../releases/latest"><b>Download</b></a> ·
-  <a href="HOW_IT_WORKS.md"><b>How it works</b></a> ·
-  <a href="https://athenesoftworks.com"><b>Website</b></a> ·
-  <a href="https://github.com/Agamemnon-Intelligence/Agamemnon-windows"><b>Windows version</b></a>
-</p>
+[![Download](https://img.shields.io/badge/Download-Agamemnon-2ea44f?style=for-the-badge)](../../releases/latest)
+[![Version](https://img.shields.io/badge/version-2.25-blue?style=for-the-badge)](../../releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey?style=for-the-badge&logo=apple)](#install)
+[![License](https://img.shields.io/badge/license-GPLv2-orange?style=for-the-badge)](LICENSE)
+[![Windows](https://img.shields.io/badge/also%20on-Windows-0078D4?style=for-the-badge)](https://github.com/Agamemnon-Intelligence/Agamemnon-windows)
+
+[How it works](HOW_IT_WORKS.md) · [Website](https://athenesoftworks.com) · [Windows version](https://github.com/Agamemnon-Intelligence/Agamemnon-windows)
+
+</div>
 
 ---
 
