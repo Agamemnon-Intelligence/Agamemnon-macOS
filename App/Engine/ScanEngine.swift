@@ -10,6 +10,8 @@ final class ScanEngine {
         var scanArchives = true
         var useClamAV = true
         var gatekeeperCheck = false
+        /// Ask Gatekeeper about apps on disk, and flag apps changed after they were signed.
+        var appSignatureCheck = false
         /// Agamemnon's built-in pattern rules for scripts and unsigned programs.
         var patternRules = true
         var exclusions: [String] = []
@@ -49,6 +51,9 @@ final class ScanEngine {
     private var skipped: [String] = []
     private var phase = "Scanning"
     private var lastReport = Date.distantPast
+    /// Log lines not yet handed to the UI. Capped, so a stalled UI can't grow it forever.
+    private var pendingLog: [ScanLogEntry] = []
+    static let maxPendingLog = 5_000
     private var progress: (ScanSnapshot) -> Void = { _ in }
 
     init(signatures: SignatureStore = .shared) {
@@ -76,9 +81,11 @@ final class ScanEngine {
         files = 0
         archivesOpened = 0
         skipped = []
+        pendingLog = []
 
         // 1. Built-in engine.
         phase = "Checking files"
+        log(.info, "Scanning \(roots.map(\.path).joined(separator: ", "))")
         for root in roots where !isCancelled {
             walk(root.resolvingSymlinksInPath(), depth: 0, container: nil, extractionRoot: nil, innerBase: nil)
         }
@@ -87,6 +94,7 @@ final class ScanEngine {
         var clamError: String?
         if options.useClamAV, ClamAV.shared.isReady, !isCancelled {
             phase = "ClamAV deep scan"
+            log(.info, "Starting ClamAV deep scan")
             report(force: true, path: "Loading ClamAV signatures…")
             let paths = roots.map { $0.resolvingSymlinksInPath().path }
             let result = ClamAV.shared.scan(
@@ -106,8 +114,12 @@ final class ScanEngine {
                 let lower = name.lowercased()
                 let level: ThreatLevel = lower.contains("eicar") ? .test : (lower.hasPrefix("pua.") ? .suspicious : .malicious)
                 detections.append(Detection(fileURL: url, innerPath: nil, threatName: name, engine: "ClamAV", level: level))
+                log(.threat, "\(name) · ClamAV · \(path)")
             }
+            if let clamError { log(.skipped, "ClamAV: \(clamError)") }
         }
+
+        log(.info, isCancelled ? "Stopped after \(files.formatted()) files" : "Finished: \(files.formatted()) files, \(archivesOpened.formatted()) archives, \(detections.count) threat\(detections.count == 1 ? "" : "s")")
 
         report(force: true, path: "")
         return ScanResult(detections: detections,
@@ -162,6 +174,9 @@ final class ScanEngine {
                                                               options: [],
                                                               errorHandler: { _, _ in true }) else { return }
         let keySet = Set(keys)
+        // Regular files are checked in batches across all cores; everything else stays in order.
+        var batch: [(URL, Int64)] = []
+        defer { if !isCancelled { scanBatch(batch, depth: depth, container: container, extractionRoot: extractionRoot, innerBase: innerBase) } }
         for case let url as URL in enumerator {
             if isCancelled { return }
             if container == nil && isExcluded(url.path) {
@@ -179,16 +194,46 @@ final class ScanEngine {
             if values.isDirectory == true {
                 if options.gatekeeperCheck, depth <= 1 {
                     checkBundle(url, container: container, extractionRoot: extractionRoot, innerBase: innerBase)
+                } else if options.appSignatureCheck, container == nil {
+                    checkAppSignature(url)
                 }
                 continue
             }
             if values.isRegularFile == true {
-                // Free each file's temporary buffers before the next one (a full scan visits
-                // hundreds of thousands of files in this one loop).
-                autoreleasepool {
-                    scanFile(url, size: Int64(values.fileSize ?? 0), depth: depth,
-                             container: container, extractionRoot: extractionRoot, innerBase: innerBase)
+                batch.append((url, Int64(values.fileSize ?? 0)))
+                if batch.count >= ScanEngine.batchSize {
+                    scanBatch(batch, depth: depth, container: container, extractionRoot: extractionRoot, innerBase: innerBase)
+                    batch.removeAll(keepingCapacity: true)
                 }
+            }
+        }
+    }
+
+    static let batchSize = 64
+
+    /// Hashes and pattern-checks a batch of files in parallel, then records the results and
+    /// opens archives one at a time, in order, on this thread.
+    private func scanBatch(_ batch: [(URL, Int64)], depth: Int, container: URL?, extractionRoot: URL?, innerBase: String?) {
+        guard !batch.isEmpty else { return }
+        var verdicts = [Detection?](repeating: nil, count: batch.count)
+        verdicts.withUnsafeMutableBufferPointer { out in
+            let out = out
+            DispatchQueue.concurrentPerform(iterations: batch.count) { i in
+                if isCancelled { return }
+                // Free each file's temporary buffers straight away (a full scan visits
+                // hundreds of thousands of files).
+                autoreleasepool {
+                    let (url, size) = batch[i]
+                    let inner = innerPath(of: url, extractionRoot: extractionRoot, innerBase: innerBase)
+                    out[i] = inspect(url, size: size, outer: container ?? url, inner: inner, container: container)
+                }
+            }
+        }
+        for (i, item) in batch.enumerated() {
+            if isCancelled { return }
+            autoreleasepool {
+                scanFile(item.0, size: item.1, depth: depth, container: container,
+                         extractionRoot: extractionRoot, innerBase: innerBase, verdict: .some(verdicts[i]))
             }
         }
     }
@@ -196,38 +241,50 @@ final class ScanEngine {
     private func innerPath(of url: URL, extractionRoot: URL?, innerBase: String?) -> String? {
         guard let extractionRoot else { return innerBase }
         var relative = url.path
-        if relative.hasPrefix(extractionRoot.path) {
-            relative = String(relative.dropFirst(extractionRoot.path.count))
+        // The temp folder is under /var, which is a link to /private/var, so a file's path
+        // may use either spelling.
+        let prefixes = [extractionRoot.path, extractionRoot.resolvingSymlinksInPath().path,
+                        "/private" + extractionRoot.path]
+        if let prefix = prefixes.first(where: { relative.hasPrefix($0 + "/") || relative == $0 }) {
+            relative = String(relative.dropFirst(prefix.count))
             while relative.hasPrefix("/") { relative.removeFirst() }
         }
         if let innerBase { return relative.isEmpty ? innerBase : "\(innerBase) ▸ \(relative)" }
         return relative.isEmpty ? nil : relative
     }
 
-    private func scanFile(_ url: URL, size: Int64, depth: Int, container: URL?, extractionRoot: URL?, innerBase: String?) {
+    /// The EICAR, hash-list and pattern checks for one file. Safe to call from several threads.
+    private func inspect(_ url: URL, size: Int64, outer: URL, inner: String?, container: URL?) -> Detection? {
+        guard size > 0 else { return nil }
+        // EICAR test string (also catches EICAR with trailing whitespace).
+        if size <= 256, let data = try? Data(contentsOf: url), Eicar.matches(data) {
+            return Detection(fileURL: outer, innerPath: inner, threatName: "EICAR-Test-File",
+                             engine: "Agamemnon", level: .test, sha256: nil)
+        }
+        if size <= options.maxHashBytes, let hit = KnownMalware.lookup(url) {
+            return Detection(fileURL: outer, innerPath: inner, threatName: hit.name,
+                             engine: hit.name.contains("VirusShare") ? "VirusShare" : "Agamemnon",
+                             level: hit.level, sha256: hit.sha256)
+        }
+        if options.patternRules {
+            return PatternRules.assess(url, size: size, outer: outer, inner: inner, container: container)
+        }
+        return nil
+    }
+
+    /// `verdict` is the result of `inspect` when it already ran (in a batch); nil runs it here.
+    private func scanFile(_ url: URL, size: Int64, depth: Int, container: URL?, extractionRoot: URL?, innerBase: String?,
+                          verdict: Detection?? = nil) {
         files += 1
-        report(force: false, path: container.map { "\($0.lastPathComponent) ▸ \(url.lastPathComponent)" } ?? url.path)
+        let shown = container.map { "\($0.lastPathComponent) ▸ \(url.lastPathComponent)" } ?? url.path
+        log(.file, shown)
+        report(force: false, path: shown)
         guard size > 0 else { return }
 
         let outer = container ?? url
         let inner = innerPath(of: url, extractionRoot: extractionRoot, innerBase: innerBase)
 
-        // EICAR test string (also catches EICAR with trailing whitespace).
-        if size <= 256, let data = try? Data(contentsOf: url), Eicar.matches(data) {
-            add(Detection(fileURL: outer, innerPath: inner, threatName: "EICAR-Test-File",
-                          engine: "Agamemnon", level: .test, sha256: nil))
-            return
-        }
-
-        if size <= options.maxHashBytes, let hit = KnownMalware.lookup(url) {
-            add(Detection(fileURL: outer, innerPath: inner, threatName: hit.name,
-                          engine: hit.name.contains("VirusShare") ? "VirusShare" : "Agamemnon",
-                          level: hit.level, sha256: hit.sha256))
-            return
-        }
-
-        if options.patternRules,
-           let hit = PatternRules.assess(url, size: size, outer: outer, inner: inner, container: container) {
+        if let hit = verdict ?? inspect(url, size: size, outer: outer, inner: inner, container: container) {
             add(hit)
             return
         }
@@ -243,6 +300,7 @@ final class ScanEngine {
         archivesOpened += 1
         let previousPhase = phase
         phase = "Looking inside \(url.lastPathComponent)"
+        log(.archive, "Opening \(inner ?? url.path)")
         report(force: true, path: url.path)
         let nestedBase = container == nil ? nil : inner
         let outcome = archives.open(url, kind: kind) { contents in
@@ -251,6 +309,7 @@ final class ScanEngine {
         phase = previousPhase
         if case .skipped(let reason) = outcome {
             skipped.append("\(inner ?? url.path): \(reason)")
+            log(.skipped, "Couldn't open \(inner ?? url.path): \(reason)")
         }
     }
 
@@ -268,9 +327,41 @@ final class ScanEngine {
                       engine: "Gatekeeper", level: level))
     }
 
+    /// Apps on disk (not inside another app): flags ones Apple has revoked, and ones whose
+    /// signature no longer matches their contents (changed after signing, as cracked apps are).
+    private func checkAppSignature(_ url: URL) {
+        guard url.pathExtension.lowercased() == "app",
+              !url.deletingLastPathComponent().path.contains(".app/"),
+              !BehaviorRules.isSystemPath(url.path + "/"),
+              // Xcode, simulators and package managers: big, Apple- or tool-built, and slow to verify.
+              !BehaviorRules.isPackageManaged(url.path + "/"),
+              !CodeIdentity.isGenuineAgamemnon(url, download: nil) else { return }
+        let identity = CodeIdentity.of(url.path)
+        switch identity.signer {
+        case .apple, .adHoc:
+            return
+        case .developer:
+            // Gatekeeper knows about revoked certificates and notarization tickets.
+            guard let verdict = Gatekeeper.assess(url), verdict.reason.contains("revoked") else { return }
+            add(Detection(fileURL: url, innerPath: nil, threatName: verdict.reason, engine: "Gatekeeper", level: .malicious))
+        case .unsigned:
+            // It was signed once (the seal is still there) but the signature doesn't check out.
+            let seal = url.appendingPathComponent("Contents/_CodeSignature/CodeResources").path
+            guard FileManager.default.fileExists(atPath: seal) else { return }
+            add(Detection(fileURL: url, innerPath: nil, threatName: "App was changed after it was signed",
+                          engine: "Agamemnon", level: .suspicious))
+        }
+    }
+
     private func add(_ detection: Detection) {
         detections.append(detection)
+        log(.threat, "\(detection.threatName) · \(detection.engine) · \(detection.displayPath)")
         report(force: true, path: detection.displayPath)
+    }
+
+    private func log(_ kind: ScanLogEntry.Kind, _ text: String) {
+        if pendingLog.count >= ScanEngine.maxPendingLog { pendingLog.removeFirst(pendingLog.count / 2) }
+        pendingLog.append(ScanLogEntry(kind: kind, text: text))
     }
 
     private func report(force: Bool, path: String) {
@@ -278,6 +369,7 @@ final class ScanEngine {
         guard force || now.timeIntervalSince(lastReport) > 0.08 else { return }
         lastReport = now
         progress(ScanSnapshot(phase: phase, filesScanned: files, archivesOpened: archivesOpened,
-                              currentPath: path, detections: detections))
+                              currentPath: path, detections: detections, newLog: pendingLog))
+        pendingLog.removeAll(keepingCapacity: true)
     }
 }

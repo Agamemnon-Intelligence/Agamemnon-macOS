@@ -65,13 +65,13 @@ xcodebuild -project Agamemnon.xcodeproj -scheme Agamemnon -configuration Debug b
 
 ## UI and design
 
-- **Dark midnight theme only.** The app forces `.dark`. Use the `Theme` colours, never hard-coded colours in views:
-  - midnight `#050916` / `#0A1230`
-  - card `#0D1632`
-  - navy buttons `#1B3474`
-  - accent `#5B93FF`
+- **Dark midnight theme only.** The app forces `.dark`. Use the `Theme` colours, never hard-coded colours in views. Users pick a theme, accent colour and background glow in Settings ▸ Appearance, so the background, card, stroke, navy and accent colours come from `Theme.palette` (`ThemeStyle` / `ThemeAccent` in `Theme.swift`) and change at runtime; the window redraws through `ThemeSettings.revision`. Default (Midnight):
+  - midnight `#01030A` / `#040918`
+  - card `#070C1E`
+  - navy buttons `#112352`
+  - accent `#5B93FF` (or teal, violet, gold)
   - gold `#D8B26A`
-  - success, warning and danger colours for status
+  - success, warning and danger colours for status (fixed, so threat colours never change meaning)
 - **Liquid Glass is for controls and navigation only** (buttons, the system sidebar). Content uses `Card` / `.panel(shape)`, which are solid. Glass on top of glass blurs whatever is behind it, including labels.
 - **Liquid Glass:** use the helpers in `Theme.swift` instead of calling `glassEffect` directly:
   - `.liquidGlass(shape, tint:, interactive:)` draws real Liquid Glass on macOS 26 and a frosted fallback on 13 to 15.

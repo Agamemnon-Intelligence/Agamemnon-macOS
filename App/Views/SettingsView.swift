@@ -15,6 +15,54 @@ struct SettingsView: View {
     @AppStorage(Prefs.virusShare) private var virusShare = true
     @State private var exclusions: [String] = Prefs.exclusionList
     @State private var copied = false
+    @AppStorage(Prefs.themeStyle) private var themeStyle = ThemeStyle.midnight.rawValue
+    @AppStorage(Prefs.themeAccent) private var themeAccent = ThemeAccent.blue.rawValue
+    @AppStorage(Prefs.themeGlow) private var themeGlow = Theme.defaultGlow
+
+    private var appearanceCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionTitle(text: "Appearance")
+                SettingRow(symbol: "paintpalette", title: "Theme",
+                           detail: (ThemeStyle(rawValue: themeStyle) ?? .midnight).detail) {
+                    Picker("", selection: $themeStyle) {
+                        ForEach(ThemeStyle.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
+                }
+                SettingRow(symbol: "paintbrush.pointed", title: "Accent colour",
+                           detail: "Used for buttons, highlights and progress bars.") {
+                    HStack(spacing: 8) {
+                        ForEach(ThemeAccent.allCases) { accent in
+                            Button { themeAccent = accent.rawValue } label: {
+                                Circle()
+                                    .fill(accent.color)
+                                    .frame(width: 20, height: 20)
+                                    .overlay(Circle().strokeBorder(Color.white.opacity(themeAccent == accent.rawValue ? 0.9 : 0), lineWidth: 2))
+                                    .padding(2)
+                            }
+                            .buttonStyle(.plain)
+                            .help(accent.title)
+                        }
+                    }
+                }
+                SettingRow(symbol: "sparkles", title: "Background glow",
+                           detail: themeGlow == 0 ? "Off: a plain dark background." : "The soft coloured light behind each page.") {
+                    Slider(value: $themeGlow, in: 0...1.5).frame(width: 150)
+                }
+                HStack {
+                    Spacer()
+                    Button("Reset to Default") {
+                        themeStyle = ThemeStyle.midnight.rawValue
+                        themeAccent = ThemeAccent.blue.rawValue
+                        themeGlow = Theme.defaultGlow
+                    }
+                    .buttonStyle(.navyCompact)
+                }
+            }
+        }
+    }
 
     var body: some View {
         Page {
@@ -47,6 +95,7 @@ struct SettingsView: View {
                 }
             }
 
+            appearanceCard
             signaturesCard
             clamAVCard
             exclusionsCard

@@ -16,6 +16,9 @@ final class ScanController: ObservableObject {
     @Published private(set) var skippedArchives: [String] = []
     @Published private(set) var lastSummary: ScanSummary?
     @Published private(set) var clamAVNote: String?
+    /// Everything the current or last scan did, newest last (the most recent `maxLog` lines).
+    @Published private(set) var log: [ScanLogEntry] = []
+    static let maxLog = 5_000
 
     private var engine: ScanEngine?
     private let vault: QuarantineVault
@@ -59,6 +62,7 @@ final class ScanController: ObservableObject {
         o.exclusions = Prefs.exclusionList
         if kind == .full { o.exclusions += ScanEngine.fullScanExclusions }
         o.gatekeeperCheck = kind == .download
+        o.appSignatureCheck = kind != .download
         return o
     }
 
@@ -85,6 +89,7 @@ final class ScanController: ObservableObject {
         detections = []
         skippedArchives = []
         clamAVNote = nil
+        log = []
         let started = Date()
         startedAt = started
         let options = ScanController.options(for: kind)
@@ -98,12 +103,26 @@ final class ScanController: ObservableObject {
                     self.archivesOpened = snapshot.archivesOpened
                     self.currentPath = snapshot.currentPath
                     self.detections = snapshot.detections
+                    self.appendLog(snapshot.newLog)
                 }
             }
             Task { @MainActor in
                 self?.finish(result, kind: kind, started: started, scheduled: scheduled)
             }
         }
+    }
+
+    private func appendLog(_ entries: [ScanLogEntry]) {
+        guard !entries.isEmpty else { return }
+        log.append(contentsOf: entries)
+        if log.count > ScanController.maxLog { log.removeFirst(log.count - ScanController.maxLog) }
+    }
+
+    /// The log as plain text, for copying or saving.
+    func logText() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return log.map { "\(f.string(from: $0.time))  \($0.kind.tag)  \($0.text)" }.joined(separator: "\n")
     }
 
     func cancel() {

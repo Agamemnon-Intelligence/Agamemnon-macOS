@@ -10,18 +10,86 @@ extension Color {
     }
 }
 
-/// Agamemnon's midnight theme.
+/// The background family the user picked in Settings ▸ Appearance.
+enum ThemeStyle: String, CaseIterable, Identifiable {
+    case midnight, classic, abyss
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .midnight: return "Midnight"
+        case .classic: return "Classic Navy"
+        case .abyss: return "Abyss"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .midnight: return "Very dark navy (default)"
+        case .classic: return "The brighter navy from earlier versions"
+        case .abyss: return "Pure black, with a hint of navy"
+        }
+    }
+
+    /// midnight, midnightHigh, sidebar, card, cardRaised, stroke, navy, navyHover, navyPressed
+    fileprivate var hexes: [UInt32] {
+        switch self {
+        case .midnight: return [0x01030A, 0x040918, 0x02050E, 0x070C1E, 0x0A1127, 0x141E3C, 0x112352, 0x172D68, 0x0B1A3E]
+        case .classic: return [0x050916, 0x0A1230, 0x060B1D, 0x0D1632, 0x111C3E, 0x1C2B57, 0x1B3474, 0x24438F, 0x142858]
+        case .abyss: return [0x000000, 0x02040A, 0x010206, 0x05080F, 0x080C17, 0x111829, 0x0E1C42, 0x142659, 0x09142F]
+        }
+    }
+}
+
+/// The accent colour the user picked in Settings ▸ Appearance.
+enum ThemeAccent: String, CaseIterable, Identifiable {
+    case blue, teal, violet, gold
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var hex: UInt32 {
+        switch self {
+        case .blue: return 0x5B93FF
+        case .teal: return 0x3CC8D8
+        case .violet: return 0x9B7BFF
+        case .gold: return 0xD8B26A
+        }
+    }
+    var color: Color { Color(hex: hex) }
+}
+
+/// Agamemnon's midnight theme. Colours follow the user's Appearance settings; views read them
+/// through `Theme.*`, and the window rebuilds when the settings change.
 enum Theme {
-    static let midnight = Color(hex: 0x050916)
-    static let midnightHigh = Color(hex: 0x0A1230)
-    static let sidebar = Color(hex: 0x060B1D)
-    static let card = Color(hex: 0x0D1632)
-    static let cardRaised = Color(hex: 0x111C3E)
-    static let stroke = Color(hex: 0x1C2B57)
-    static let navy = Color(hex: 0x1B3474)
-    static let navyHover = Color(hex: 0x24438F)
-    static let navyPressed = Color(hex: 0x142858)
-    static let accent = Color(hex: 0x5B93FF)
+    struct Palette {
+        let midnight, midnightHigh, sidebar, card, cardRaised, stroke, navy, navyHover, navyPressed, accent: Color
+
+        init(style: ThemeStyle, accent: ThemeAccent) {
+            let c = style.hexes.map { Color(hex: $0) }
+            (midnight, midnightHigh, sidebar, card, cardRaised) = (c[0], c[1], c[2], c[3], c[4])
+            (stroke, navy, navyHover, navyPressed) = (c[5], c[6], c[7], c[8])
+            self.accent = accent.color
+        }
+
+        static func fromPrefs() -> Palette {
+            let d = UserDefaults.standard
+            return Palette(style: ThemeStyle(rawValue: d.string(forKey: Prefs.themeStyle) ?? "") ?? .midnight,
+                           accent: ThemeAccent(rawValue: d.string(forKey: Prefs.themeAccent) ?? "") ?? .blue)
+        }
+    }
+
+    /// Only changed on the main thread, by `ThemeSettings`.
+    static var palette = Palette.fromPrefs()
+
+    static var midnight: Color { palette.midnight }
+    static var midnightHigh: Color { palette.midnightHigh }
+    static var sidebar: Color { palette.sidebar }
+    static var card: Color { palette.card }
+    static var cardRaised: Color { palette.cardRaised }
+    static var stroke: Color { palette.stroke }
+    static var navy: Color { palette.navy }
+    static var navyHover: Color { palette.navyHover }
+    static var navyPressed: Color { palette.navyPressed }
+    static var accent: Color { palette.accent }
     static let gold = Color(hex: 0xD8B26A)
     static let text = Color.white
     static let textSecondary = Color(hex: 0x93A2C9)
@@ -30,13 +98,18 @@ enum Theme {
     static let warning = Color(hex: 0xFFB547)
     static let danger = Color(hex: 0xFF5C7A)
 
-    static let background = LinearGradient(colors: [midnightHigh, midnight],
-                                            startPoint: .top, endPoint: .bottom)
+    static var background: LinearGradient {
+        LinearGradient(colors: [midnightHigh, midnight], startPoint: .top, endPoint: .bottom)
+    }
 
     /// Content panels: solid, so text stays crisp. Liquid Glass is kept for controls.
-    static let panel = LinearGradient(colors: [cardRaised.opacity(0.94), card.opacity(0.90)],
-                                      startPoint: .top, endPoint: .bottom)
-    static let panelStroke = LinearGradient(colors: [Color.white.opacity(0.11), Color.white.opacity(0.03)],
+    static var panel: LinearGradient {
+        LinearGradient(colors: [cardRaised.opacity(0.94), card.opacity(0.90)], startPoint: .top, endPoint: .bottom)
+    }
+    /// How strong the background glow is unless the user changes it.
+    static let defaultGlow = 0.6
+
+    static let panelStroke = LinearGradient(colors: [Color.white.opacity(0.09), Color.white.opacity(0.02)],
                                             startPoint: .top, endPoint: .bottom)
 
     static func color(for level: ThreatLevel) -> Color {
@@ -211,23 +284,49 @@ extension Theme {
     }
 }
 
+/// Watches the Appearance settings and swaps `Theme.palette` when they change.
+@MainActor
+final class ThemeSettings: ObservableObject {
+    static let shared = ThemeSettings()
+    /// Bumped on every change; the window uses it to redraw with the new colours.
+    @Published private(set) var revision = 0
+    private var observer: NSObjectProtocol?
+
+    private init() {
+        observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
+                                                          object: nil, queue: .main) { _ in
+            Task { @MainActor in ThemeSettings.shared.refresh() }
+        }
+    }
+
+    private func refresh() {
+        let next = Theme.Palette.fromPrefs()
+        let old = Theme.palette
+        guard next.navy != old.navy || next.midnight != old.midnight || next.accent != old.accent else { return }
+        Theme.palette = next
+        revision += 1
+    }
+}
+
 /// Soft midnight glows behind the content, so the glass has something to refract.
 struct AuroraBackground: View {
+    @AppStorage(Prefs.themeGlow) private var glow = Theme.defaultGlow
+
     var body: some View {
         ZStack {
             Theme.background
             Circle()
-                .fill(Theme.navyHover.opacity(0.45))
+                .fill(Theme.navyHover.opacity(0.45 * glow))
                 .frame(width: 520, height: 520)
                 .blur(radius: 140)
                 .offset(x: -260, y: -240)
             Circle()
-                .fill(Theme.accent.opacity(0.16))
+                .fill(Theme.accent.opacity(0.16 * glow))
                 .frame(width: 420, height: 420)
                 .blur(radius: 150)
                 .offset(x: 320, y: 60)
             Circle()
-                .fill(Theme.gold.opacity(0.10))
+                .fill(Theme.gold.opacity(0.10 * glow))
                 .frame(width: 380, height: 380)
                 .blur(radius: 160)
                 .offset(x: -40, y: 380)

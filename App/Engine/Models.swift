@@ -83,6 +83,28 @@ struct ScanSummary: Codable, Hashable {
     var duration: TimeInterval { finished.timeIntervalSince(started) }
 }
 
+/// One line in a scan's log.
+struct ScanLogEntry: Identifiable {
+    enum Kind { case info, file, archive, skipped, threat }
+    let id = UUID()
+    let time = Date()
+    let kind: Kind
+    let text: String
+}
+
+extension ScanLogEntry.Kind {
+    /// Short fixed-width label for plain-text logs.
+    var tag: String {
+        switch self {
+        case .info: return "INFO   "
+        case .file: return "FILE   "
+        case .archive: return "ARCHIVE"
+        case .skipped: return "SKIPPED"
+        case .threat: return "THREAT "
+        }
+    }
+}
+
 /// Live progress, sent from the scan thread to the UI.
 struct ScanSnapshot {
     var phase: String
@@ -90,6 +112,8 @@ struct ScanSnapshot {
     var archivesOpened: Int
     var currentPath: String
     var detections: [Detection]
+    /// Log lines since the previous snapshot.
+    var newLog: [ScanLogEntry] = []
 }
 
 /// Final result of ScanEngine.run.

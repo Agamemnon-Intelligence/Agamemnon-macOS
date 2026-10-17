@@ -6,6 +6,7 @@ struct AgamemnonApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel.shared
     @StateObject private var nav = Navigator.shared
+    @StateObject private var theme = ThemeSettings.shared
 
     var body: some Scene {
         Window("Agamemnon", id: "main") {
@@ -14,6 +15,7 @@ struct AgamemnonApp: App {
                 .frame(minWidth: 980, minHeight: 660)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
+                .id(theme.revision)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1120, height: 760)
@@ -33,6 +35,8 @@ struct AgamemnonApp: App {
             MenuBarView()
                 .agamemnonEnvironment(model, nav)
                 .preferredColorScheme(.dark)
+                .tint(Theme.accent)
+                .id(theme.revision)
         } label: {
             Image(systemName: model.menuBarSymbol)
         }

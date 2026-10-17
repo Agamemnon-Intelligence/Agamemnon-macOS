@@ -27,6 +27,9 @@ enum Prefs {
     static let autoInstallClamAV = "autoInstallClamAV"
     static let clamAVAutoInstallTried = "clamAVAutoInstallTried"
     static let trustedExtensions = "trustedExtensions"
+    static let themeStyle = "themeStyle"
+    static let themeAccent = "themeAccent"
+    static let themeGlow = "themeGlow"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [

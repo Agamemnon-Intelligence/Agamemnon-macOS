@@ -49,6 +49,10 @@ enum PatternRules {
     private static let browserLoot = ["login data", "cookies", "web data", "logins.json", "key4.db", "formhistory"]
     private static let exfil = ["curl", "http://", "https://", "ditto -c -k", "zip -r", "nsurlsession", "urlsession"]
     private static let tempFolders = ["/tmp/", "$tmpdir", "/users/shared/", "mktemp", "/private/var/folders/"]
+    /// Places stealers post stolen files to: chat-app bots and webhooks rather than a server of their own.
+    private static let dropChannels = ["discord.com/api/webhooks", "discordapp.com/api/webhooks",
+                                       "api.telegram.org/bot", "/senddocument", "hooks.slack.com/services"]
+    private static let walletApps = ["ledger live.app", "trezor suite.app", "exodus.app", "atomic wallet.app", "electrum.app"]
 
     static let rules: [Rule] = [
         Rule("fake-password-prompt", "MacOS.Stealer.PasswordPhish",
@@ -95,6 +99,48 @@ enum PatternRules {
         Rule("fake-apple-agent", "MacOS.Persistence.FakeAppleAgent", kinds: [.script],
              all: ["launchagents", "runatload", "com.apple."], oneOf(["/users/shared/", "/tmp/", "/library/."]),
              level: .suspicious),
+        // AMOS / Atomic Stealer and its offshoots: notes, keychain and browser data zipped together.
+        Rule("amos-grabber", "MacOS.Stealer.AMOS",
+             oneOf(["notestore.sqlite", "group.com.apple.notes"]), oneOf(["login.keychain-db", "/keychains/"]),
+             oneOf(browsers, 2), oneOf(["ditto -c -k", "zip -r", "/tmp/", "@/tmp/"])),
+        // AMOS and others replace hardware-wallet apps with trojaned copies.
+        Rule("wallet-app-swap", "MacOS.Stealer.WalletAppSwap",
+             oneOf(walletApps), oneOf(["app.asar", "/contents/resources/"]),
+             oneOf(["curl", "http://", "https://", "rm -rf", "ditto"]), oneOf(["killall", "pkill", "osascript", "rm -rf"])),
+        // Python and Node stealers that post loot to a Discord webhook or a Telegram bot.
+        Rule("chat-exfil", "MacOS.Stealer.ChatExfil",
+             oneOf(dropChannels), oneOf(browserLoot + ["local storage/leveldb", "tdata", "wallet", ".ssh/id_", "login.keychain"], 2)),
+        Rule("discord-token", "MacOS.Stealer.DiscordToken",
+             all: ["local storage/leveldb"], oneOf(["discord", "discordcanary", "discordptb"]),
+             oneOf(dropChannels + ["mfa\\.", "[\\w-]{24}", "dqw4w9wgxcq"])),
+        Rule("telegram-session", "MacOS.Stealer.TelegramSession",
+             all: ["tdata"], oneOf(["telegram desktop/tdata", "ru.keepcoder.telegram", "telegram desktop"]),
+             oneOf(dropChannels + ["@/tmp/", "ditto -c -k", "zip -r"])),
+        Rule("ssh-key-theft", "MacOS.Stealer.SSHKeys",
+             oneOf([".ssh/id_rsa", ".ssh/id_ed25519", ".ssh/id_ecdsa"]), oneOf(dropChannels + ["@/tmp/", "@/private/var/folders/"])),
+        // Clipboard "clippers" swap copied crypto addresses for the attacker's.
+        Rule("crypto-clipper", "MacOS.Stealer.Clipper",
+             oneOf(["pbpaste", "nspasteboard", "generalpasteboard", "pyperclip"]),
+             oneOf(["pbcopy", "setstring", "pyperclip.copy", "clearcontents"]),
+             oneOf(["^(bc1|[13])", "bc1[a-z0-9]", "0x[a-fa-f0-9]{40}", "^0x[a-f0-9]", "[13][a-km-za-hj-np-z1-9]{25,34}", "t[a-za-z0-9]{33}"], 2)),
+        // Python reverse shell: a socket wired to a shell's input and output.
+        Rule("python-reverse-shell", "MacOS.Backdoor.PythonReverseShell", kinds: [.script],
+             all: ["socket", "os.dup2", ".connect("], oneOf(["pty.spawn", "\"/bin/sh\"", "\"/bin/bash\"", "\"/bin/zsh\"", "'/bin/sh'", "'/bin/bash'"])),
+        // Turning off Apple's own protection before running something.
+        Rule("disable-protection", "MacOS.Tamper.DisableProtection", kinds: [.script],
+             oneOf(["spctl --master-disable", "spctl --global-disable", "com.apple.xprotect", "xprotectservice", "com.apple.mrt"]),
+             oneOf(["curl", "launchctl unload", "launchctl bootout", "launchctl disable", "chmod +x"]),
+             level: .suspicious),
+        // Remote AppleScript: fetched from the internet and handed straight to osascript.
+        Rule("remote-applescript", "MacOS.Downloader.RemoteAppleScript", kinds: [.script],
+             all: ["curl"], oneOf(["| osascript", "|osascript", "osascript -e \"$(curl", "osascript -e \"$(/usr/bin/curl"]),
+             level: .suspicious),
+        // A program that adds itself to Login Items or a LaunchAgent and hides in a dot-folder.
+        Rule("hidden-persistence", "MacOS.Persistence.HiddenAgent", kinds: [.script],
+             oneOf(["launchagents/", "launchdaemons/", "make login item", "make new login item"]),
+             oneOf(["runatload", "keepalive", "hidden:true", "hidden: true"]),
+             oneOf(["/users/shared/.", "~/.", "$home/.", "/library/application support/."]),
+             level: .suspicious),
     ]
 
     // MARK: - Matching
@@ -105,11 +151,18 @@ enum PatternRules {
         let ext = url.pathExtension.lowercased()
         let scriptExts: Set<String> = ["sh", "command", "tool", "zsh", "bash", "applescript", "scpt", "py", "js", "mjs", "cjs", "rb", "pl"]
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        let head = (try? handle.read(upToCount: 4)) ?? Data()
+        let head = (try? handle.read(upToCount: 8)) ?? Data()
         try? handle.close()
         guard head.count >= 4 else { return nil }
         let magic = head.withUnsafeBytes { $0.load(as: UInt32.self) }
         let machO: Set<UInt32> = [0xfeedfacf, 0xcffaedfe, 0xfeedface, 0xcefaedfe, 0xcafebabe, 0xbebafeca]
+        // Java class files start with CAFEBABE too. A universal binary follows it with a small
+        // architecture count; a class file follows it with its version (major 45 or higher).
+        if head.starts(with: [0xca, 0xfe, 0xba, 0xbe]) {
+            guard head.count >= 8 else { return nil }
+            let archCount = head.dropFirst(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+            if archCount == 0 || archCount >= 30 { return nil }
+        }
         if machO.contains(magic) { return size <= maxProgramBytes ? .program : nil }
         if head.starts(with: [0x23, 0x21]) || scriptExts.contains(ext) { return size <= maxScriptBytes ? .script : nil }
         return nil

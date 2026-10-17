@@ -83,7 +83,7 @@ Large files are read in 1 MB chunks, so even a 1 GB file is hashed without loadi
 - **Download:** in the background, list by list (`VirusShare_00000.md5` …), politely spaced, about 1.4 GB in total the first time. It resumes where it stopped after a restart. After that, Agamemnon looks for new lists once a week. Turn it off in Settings.
 - **Storage:** 256 sorted files in `Signatures/VirusShare/` (one per first byte of the hash, 16 bytes per hash, about 680 MB). New lists go into `.new` files and are sorted in every 50 lists, so protection grows during the first download.
 - **Lookup:** the MD5 is worked out in the same pass as the SHA-256, so files are only read once. The right bucket file is memory-mapped and binary-searched; the full list is never loaded into memory.
-- **What it judges:** VirusShare's lists also contain harmless files that happened to sit inside malware archives (fonts, the standard `Credits.rtf`, Python's Windows launcher stubs `cli-64.exe`/`w32.exe`, tiny packaging files). A test on a normal Mac found 14 of these (including a Ruby library file). So VirusShare is only used for **Mac programs** (Mach-O binaries) and **installers and archives** (DMG, PKG, ZIP…), and never for files under 64 bytes or the empty-file hash. Scripts are left to the pattern rules, MalwareBazaar and ClamAV.
+- **What it judges:** VirusShare's lists also contain harmless files that happened to sit inside malware archives (fonts, the standard `Credits.rtf`, Python's Windows launcher stubs `cli-64.exe`/`w32.exe`, tiny packaging files). A test on a normal Mac found 14 of these (including a Ruby library file). So VirusShare is only used for **Mac programs** (Mach-O binaries, but not Java `.class` files, which start with the same `CAFEBABE` bytes as universal binaries and are told apart by the number that follows) and **installers and archives** (DMG, PKG, ZIP…), and never for files under 64 bytes or the empty-file hash. Scripts are left to the pattern rules, MalwareBazaar and ClamAV.
 - **Results:** an unsigned program on the list is **malware**. A match on something signed by Apple or a Developer ID, or on an installer or archive, is only **suspicious**, so it's reported but never moved automatically.
 
 ### 2. Gatekeeper (Apple's own check)
@@ -109,6 +109,15 @@ spctl --assess --type install  Some.pkg
 - macOS's "Where from" record shows it was downloaded from `github.com/Agamemnon-Intelligence/Agamemnon-macOS/` or `athenesoftworks.com`.
 
 Only the Gatekeeper warning is skipped. Hash and ClamAV checks still run on it.
+
+**Apps already on your Mac.** Quick, Full and Custom scans also check every app they find on disk (not apps inside other apps, macOS's own, Xcode, simulators or package-manager folders):
+
+| Finding | Agamemnon reports |
+| --- | --- |
+| Developer ID app whose certificate or notarization Apple has revoked (asked with `spctl`) | **Malware** |
+| App that was signed but whose signature no longer matches its contents, which is what cracked and trojaned apps look like | **Suspicious:** "App was changed after it was signed" |
+
+Unsigned and un-notarized apps on disk are not reported by scans, because so many harmless ones are.
 
 A suspicious item isn't necessarily malware: plenty of small open-source apps aren't notarized. That's why suspicious items are only flagged, unless you turn on **Quarantine apps Apple hasn't verified**.
 
@@ -163,6 +172,17 @@ Each rule needs several strings together, never one word. For example, the passw
 | `MacOS.Dropper.GatekeeperBypass` | A script that downloads into a temp folder, removes the quarantine flag and makes it runnable | Droppers, ClickFix | Suspicious |
 | `MacOS.Downloader.HiddenScript` | Decoding base64 and piping it into a shell | ClickFix, Bundlore | Suspicious |
 | `MacOS.Persistence.FakeAppleAgent` | A script writing a `com.apple.` LaunchAgent that runs from a temp or hidden folder | Backdoors | Suspicious |
+| `MacOS.Stealer.AMOS` | Notes database, the login keychain and two browsers' data, packed up together | AMOS and offshoots | Malware |
+| `MacOS.Stealer.WalletAppSwap` | Replacing Ledger Live, Trezor Suite, Exodus, Atomic or Electrum with a downloaded copy | AMOS | Malware |
+| `MacOS.Stealer.ChatExfil` | Sending two kinds of stolen data to a Discord webhook, Telegram bot or Slack hook | Python/Node stealers | Malware |
+| `MacOS.Stealer.DiscordToken` | Reading Discord's token database plus token patterns or a drop channel | Token grabbers | Malware |
+| `MacOS.Stealer.TelegramSession` | Copying Telegram's `tdata` session folder and packing or sending it | AMOS, Poseidon | Malware |
+| `MacOS.Stealer.SSHKeys` | SSH private keys sent to a chat bot or uploaded from a temp folder | Stealers | Malware |
+| `MacOS.Stealer.Clipper` | Reading and rewriting the clipboard plus two crypto-address patterns | Clippers | Malware |
+| `MacOS.Backdoor.PythonReverseShell` | A Python socket wired to a shell with `os.dup2` | Backdoors | Malware |
+| `MacOS.Tamper.DisableProtection` | Turning off Gatekeeper, XProtect or MRT plus a download or `launchctl` | Droppers | Suspicious |
+| `MacOS.Downloader.RemoteAppleScript` | Piping a downloaded script straight into `osascript` | ClickFix | Suspicious |
+| `MacOS.Persistence.HiddenAgent` | A LaunchAgent or login item that starts at login from a hidden folder | Backdoors | Suspicious |
 
 Pattern rules run in every scan (after the hash check), in download protection, in the startup items check, on browser extensions, and in behaviour protection (on each new unsigned program, and on the script file an interpreter such as `bash`, `python` or `osascript` is started with).
 
@@ -192,10 +212,12 @@ During a scan, Agamemnon:
 
 1. Walks every folder, including inside app bundles. It skips symbolic links, so it can't loop forever or wander off the disk.
 2. Skips your **exclusions** and its own folders, such as the quarantine vault.
-3. For each file: checks for EICAR, hashes it and looks the hash up, then opens it if it's an archive, installer or disk image (see below).
+3. For each file: checks for EICAR, hashes it and looks the hash up, runs the pattern rules, then opens it if it's an archive, installer or disk image (see below). Files are checked in batches of 64 across all processor cores (2–3× faster than one at a time); archives are still opened one at a time, so the scratch-space limits hold.
 4. Runs ClamAV, if it's installed and turned on.
 5. Moves malware to quarantine, if **Quarantine threats automatically** is on (the default). **Suspicious items always wait for you.**
 6. Saves a summary, adds it to Recent Activity and sends a notification if anything was found.
+
+The **Logs** panel on the Scan page shows what the scan is doing, live: every file checked, each archive opened, anything that couldn't be opened, and each threat found. It can be filtered, copied or saved as a text file. It keeps the most recent 5,000 lines, stays in memory only, and is cleared when the next scan starts.
 
 You can stop a scan at any time, and that also stops ClamAV. Some protected folders, like Mail and Messages, can only be scanned if you give Agamemnon **Full Disk Access**. The app tells you when it doesn't have it.
 

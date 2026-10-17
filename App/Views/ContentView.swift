@@ -111,6 +111,8 @@ struct Sidebar: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
+        // A dark wash under the system sidebar, so the desktop behind it doesn't lighten it.
+        .background(Theme.sidebar.opacity(0.82).ignoresSafeArea())
         .safeAreaInset(edge: .top, spacing: 0) { header }
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
     }

@@ -37,6 +37,8 @@ struct ScanView: View {
             }
 
             results
+
+            if !scanner.log.isEmpty { ScanLogCard() }
         }
     }
 
@@ -156,7 +158,11 @@ struct ScanView: View {
                     metric("Threats", "\(scanner.detections.count)", color: scanner.detections.isEmpty ? Theme.text : Theme.danger)
                     if let started = scanner.startedAt {
                         TimelineView(.periodic(from: started, by: 1)) { context in
-                            metric("Elapsed", Duration.seconds(context.date.timeIntervalSince(started)).formatted(.time(pattern: .hourMinuteSecond)))
+                            let seconds = context.date.timeIntervalSince(started)
+                            HStack(spacing: 28) {
+                                metric("Elapsed", Duration.seconds(seconds).formatted(.time(pattern: .hourMinuteSecond)))
+                                metric("Files per second", seconds >= 1 ? Int(Double(scanner.filesScanned) / seconds).formatted() : "–")
+                            }
                         }
                     }
                 }
@@ -255,11 +261,164 @@ struct DetectionRow: View {
                     .textSelection(.enabled)
             }
             Spacer()
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([detection.fileURL])
+            } label: { Image(systemName: "magnifyingglass") }
+                .buttonStyle(.navyCompact)
+                .help("Show in Finder")
+                .disabled(!FileManager.default.fileExists(atPath: detection.fileURL.path))
             if actionsEnabled {
                 Button("Ignore") { scanner.ignore(detection) }.buttonStyle(.navyCompact)
                 Button("Quarantine") { scanner.quarantine(detection) }
                     .buttonStyle(NavyButtonStyle(kind: .primary, compact: true))
             }
         }
+    }
+}
+
+/// Everything the scan did, live: each file checked, archives opened, skipped items and threats.
+struct ScanLogCard: View {
+    enum Filter: String, CaseIterable, Identifiable {
+        case all = "Everything", threats = "Threats", archives = "Archives", problems = "Skipped"
+        var id: String { rawValue }
+
+        func includes(_ kind: ScanLogEntry.Kind) -> Bool {
+            switch self {
+            case .all: return true
+            case .threats: return kind == .threat
+            case .archives: return kind == .archive
+            case .problems: return kind == .skipped
+            }
+        }
+    }
+
+    @EnvironmentObject private var scanner: ScanController
+    @AppStorage("scan.logExpanded") private var expanded = true
+    @AppStorage("scan.logFollow") private var follow = true
+    @State private var filter = Filter.all
+    @State private var copied = false
+
+    private static let timeFormat: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .bold))
+                                .rotationEffect(.degrees(expanded ? 90 : 0))
+                            SectionTitle(text: "Logs")
+                            Text("\(scanner.log.count.formatted()) line\(scanner.log.count == 1 ? "" : "s")")
+                                .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+                        }
+                        .foregroundStyle(Theme.textTertiary)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    if expanded {
+                        Picker("", selection: $filter) {
+                            ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 300)
+                        Toggle("Follow", isOn: $follow)
+                            .toggleStyle(.checkbox)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textSecondary)
+                            .help("Keep the newest line in view")
+                        Button(copied ? "Copied" : "Copy") { copy() }.buttonStyle(.navyCompact)
+                        Button("Save…") { save() }.buttonStyle(.navyCompact)
+                    }
+                }
+
+                if expanded { lines }
+            }
+        }
+    }
+
+    private var lines: some View {
+        let shown = filter == .all ? scanner.log : scanner.log.filter { filter.includes($0.kind) }
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(shown) { entry in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(ScanLogCard.timeFormat.string(from: entry.time))
+                                .foregroundStyle(Theme.textTertiary)
+                            Image(systemName: symbol(entry.kind))
+                                .foregroundStyle(color(entry.kind))
+                                .frame(width: 14)
+                            Text(entry.text)
+                                .foregroundStyle(entry.kind == .file ? Theme.textSecondary : color(entry.kind))
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        .font(.system(size: 11, design: .monospaced))
+                        .id(entry.id)
+                    }
+                    if shown.isEmpty {
+                        Text("Nothing here yet.")
+                            .font(.system(size: 12)).foregroundStyle(Theme.textTertiary)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            }
+            .frame(height: 260)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.midnight.opacity(0.7)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.stroke, lineWidth: 1))
+            .onChange(of: shown.last?.id) { last in
+                guard follow, let last else { return }
+                proxy.scrollTo(last, anchor: .bottom)
+            }
+        }
+    }
+
+    private func symbol(_ kind: ScanLogEntry.Kind) -> String {
+        switch kind {
+        case .info: return "info.circle"
+        case .file: return "doc"
+        case .archive: return "shippingbox"
+        case .skipped: return "exclamationmark.circle"
+        case .threat: return "ladybug.fill"
+        }
+    }
+
+    private func color(_ kind: ScanLogEntry.Kind) -> Color {
+        switch kind {
+        case .info: return Theme.accent
+        case .file: return Theme.textTertiary
+        case .archive: return Theme.gold
+        case .skipped: return Theme.warning
+        case .threat: return Theme.danger
+        }
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(scanner.logText(), forType: .string)
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            copied = false
+        }
+    }
+
+    private func save() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "Agamemnon scan log.txt"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? scanner.logText().write(to: url, atomically: true, encoding: .utf8)
     }
 }

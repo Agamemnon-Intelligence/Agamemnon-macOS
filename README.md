@@ -7,7 +7,7 @@
 **Free, open-source antivirus for macOS. Behaviour protection, pattern rules, a ransomware shield and 43 million known-malware fingerprints, in one quiet menu bar app.**
 
 [![Download](https://img.shields.io/badge/Download-Agamemnon-2ea44f?style=for-the-badge)](../../releases/latest)
-[![Version](https://img.shields.io/badge/version-2.25-blue?style=for-the-badge)](../../releases)
+[![Version](https://img.shields.io/badge/version-3.0-blue?style=for-the-badge)](../../releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey?style=for-the-badge&logo=apple)](#install)
 [![License](https://img.shields.io/badge/license-GPLv2-orange?style=for-the-badge)](LICENSE)
 [![Windows](https://img.shields.io/badge/also%20on-Windows-0078D4?style=for-the-badge)](https://github.com/Agamemnon-Intelligence/Agamemnon-windows)
