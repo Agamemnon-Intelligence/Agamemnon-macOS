@@ -230,6 +230,8 @@ struct SecurityCheckupView: View {
                     }
                 }
             }
+
+            SoftwareUpdatesCard()
         }
         .onAppear { if checkup.items.isEmpty { checkup.run() } }
     }

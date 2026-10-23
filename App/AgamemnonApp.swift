@@ -48,6 +48,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
         Task { @MainActor in AppModel.shared.start() }
+        // Finder ▸ right-click ▸ Services ▸ Scan with Agamemnon.
+        NSApp.servicesProvider = ScanService()
+        NSUpdateDynamicServices()
+    }
+
+    /// Files and folders dropped on Agamemnon's Dock icon are scanned.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Task { @MainActor in ScanService.scan(urls) }
+    }
+
+    /// A normal quit (not malware killing it), so the protection helper doesn't restart it.
+    func applicationWillTerminate(_ notification: Notification) {
+        SelfProtection.markQuit()
     }
 
     /// Keep protecting from the menu bar when the window is closed.
@@ -74,5 +87,12 @@ extension View {
             .environmentObject(model.behavior)
             .environmentObject(model.dns)
             .environmentObject(model.scheduler)
+            .environmentObject(model.usb)
+            .environmentObject(model.clipboard)
+            .environmentObject(model.selfProtection)
+            .environmentObject(model.onAccess)
+            .environmentObject(model.updater)
+            .environmentObject(model.privacy)
+            .environmentObject(model.selfUpdater)
     }
 }

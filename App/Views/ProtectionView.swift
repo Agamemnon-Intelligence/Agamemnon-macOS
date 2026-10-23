@@ -22,9 +22,13 @@ struct ProtectionView: View {
             PageHeader(title: "Real-Time Protection",
                        subtitle: "Agamemnon keeps watch in the background while it's in your menu bar.")
 
+            SelfProtectionCard()
             behaviorCard
             RansomwareCard()
             downloadsCard
+            USBCard()
+            ClipboardCard()
+            PrivacyCard()
             BrowserCard()
             StartupSweepCard()
             adminCard

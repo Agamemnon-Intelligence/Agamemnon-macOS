@@ -15,6 +15,7 @@ struct OverviewView: View {
 
     var body: some View {
         Page {
+            AgamemnonUpdateBanner()
             hero
 
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
@@ -166,6 +167,12 @@ struct OverviewView: View {
                           signatures.urlhausCount > 0 ? Theme.success : Theme.textTertiary)
                 engineRow("ClamAV", model.clamAVReady ? "Ready" : (model.clamAVInstalling ? "Installing…" : (model.clamAVInstalled ? "Needs signatures" : "Not installed")),
                           model.clamAVReady ? Theme.success : Theme.textTertiary)
+                engineRow("Apple XProtect rules", model.xprotectReady && Prefs.bool(Prefs.useXProtect) ? "\(model.xprotectRuleCount) rules" : (model.yaraInstalled ? "Off" : "Needs yara"),
+                          model.xprotectReady && Prefs.bool(Prefs.useXProtect) ? Theme.success : Theme.textTertiary)
+                engineRow("Program analysis & script decoding", Prefs.bool(Prefs.patternRules) ? "On" : "Off",
+                          Prefs.bool(Prefs.patternRules) ? Theme.success : Theme.warning)
+                engineRow("Cloud check (MalwareBazaar)", CloudLookup.isEnabled ? "On" : (AbuseCH.hasKey ? "Off" : "Needs Auth-Key"),
+                          CloudLookup.isEnabled ? Theme.success : Theme.textTertiary)
                 engineRow("Archive & installer scanning", Prefs.bool(Prefs.scanArchives) ? "On" : "Off",
                           Prefs.bool(Prefs.scanArchives) ? Theme.success : Theme.warning)
             }

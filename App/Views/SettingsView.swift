@@ -13,7 +13,11 @@ struct SettingsView: View {
     @AppStorage(Prefs.patternRules) private var patternRules = true
     @AppStorage(Prefs.urlhausProtection) private var urlhaus = true
     @AppStorage(Prefs.virusShare) private var virusShare = true
+    @AppStorage(Prefs.useXProtect) private var useXProtect = true
     @State private var exclusions: [String] = Prefs.exclusionList
+    @State private var abuseKey = ""
+    @State private var hasAbuseKey = AbuseCH.hasKey
+    @State private var keyMessage: String?
     @State private var copied = false
     @AppStorage(Prefs.themeStyle) private var themeStyle = ThemeStyle.midnight.rawValue
     @AppStorage(Prefs.themeAccent) private var themeAccent = ThemeAccent.blue.rawValue
@@ -95,9 +99,11 @@ struct SettingsView: View {
                 }
             }
 
+            AgamemnonUpdateCard()
             appearanceCard
             signaturesCard
             clamAVCard
+            xprotectCard
             exclusionsCard
 
             Card {
@@ -141,6 +147,7 @@ struct SettingsView: View {
                 if let error = signatures.lastError {
                     Notice(symbol: "xmark.octagon", text: error, color: Theme.danger)
                 }
+                abuseKeyRow
                 SettingRow(symbol: "square.stack.3d.down.right", title: "VirusShare hash lists",
                            detail: signatures.virusShareCount > 0
                                ? "\(signatures.virusShareCount.formatted()) extra malware fingerprints (MD5) from VirusShare.com, kept on disk and checked in the same pass as the others."
@@ -156,6 +163,81 @@ struct SettingsView: View {
                 Toggle("Update automatically twice a day", isOn: $autoUpdate)
                     .toggleStyle(.checkbox)
                     .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+            }
+        }
+    }
+
+    // MARK: - abuse.ch key
+
+    private var abuseKeyRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SettingRow(symbol: "key.fill", title: hasAbuseKey ? "abuse.ch Auth-Key saved" : "abuse.ch Auth-Key (optional)",
+                       detail: hasAbuseKey
+                           ? "Adds MalwareBazaar's own feed and the cloud check. It's kept in your keychain and only ever sent to abuse.ch."
+                           : "Not needed: Agamemnon updates from free lists that need no account. A free key from auth.abuse.ch adds MalwareBazaar's own feed and the cloud check on top.",
+                       color: hasAbuseKey ? Theme.success : Theme.textSecondary) {
+                if hasAbuseKey {
+                    Button("Remove") {
+                        AbuseCH.setAuthKey("")
+                        hasAbuseKey = false
+                    }
+                    .buttonStyle(.navyCompact)
+                } else {
+                    Button("Get a Key") { NSWorkspace.shared.open(AbuseCH.signUpURL) }.buttonStyle(.navyCompact)
+                }
+            }
+            if !hasAbuseKey {
+                HStack {
+                    SecureField("Paste your Auth-Key", text: $abuseKey)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 360)
+                    Button("Save") {
+                        if AbuseCH.setAuthKey(abuseKey) {
+                            hasAbuseKey = AbuseCH.hasKey
+                            abuseKey = ""
+                            keyMessage = nil
+                            signatures.update()
+                            signatures.updateURLhaus()
+                        } else {
+                            keyMessage = "That doesn't look like an Auth-Key (letters and numbers only)."
+                        }
+                    }
+                    .buttonStyle(NavyButtonStyle(kind: .primary, compact: true))
+                    .disabled(abuseKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                if let keyMessage {
+                    Text(keyMessage).font(.system(size: 11)).foregroundStyle(Theme.warning)
+                }
+            }
+        }
+    }
+
+    // MARK: - XProtect rules
+
+    private var xprotectCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 14) {
+                SectionTitle(text: "Apple XProtect rules")
+                SettingRow(symbol: "apple.logo",
+                           title: model.xprotectReady ? "Apple's malware rules are on" : (model.yaraInstalled ? "XProtect rules not found" : "Needs the free yara tool"),
+                           detail: model.xprotectReady
+                               ? "\(model.xprotectRuleCount.formatted()) rules from XProtect \(model.xprotectVersion.map(String.init) ?? "") (updated by macOS). Every program and script a scan finds, inside archives and on USB drives too, is checked with Apple's own detections."
+                               : "macOS only checks files with XProtect when they're opened. With yara installed, Agamemnon runs Apple's same rules over everything it scans.",
+                           color: model.xprotectReady ? Theme.success : Theme.textSecondary) {
+                    Toggle("", isOn: $useXProtect).toggleStyle(.switch).labelsHidden()
+                        .disabled(!model.xprotectReady)
+                }
+                if !model.yaraInstalled {
+                    HStack(spacing: 10) {
+                        Button(model.yaraInstalling ? "Installing…" : "Install yara") { model.installYara() }
+                            .buttonStyle(NavyButtonStyle(kind: .primary, compact: false))
+                            .disabled(model.yaraInstalling)
+                        if model.yaraInstalling { ProgressView().controlSize(.small) }
+                    }
+                }
+                if let message = model.yaraMessage {
+                    Text(message).font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                }
             }
         }
     }

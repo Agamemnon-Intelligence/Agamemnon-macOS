@@ -30,6 +30,17 @@ enum Prefs {
     static let themeStyle = "themeStyle"
     static let themeAccent = "themeAccent"
     static let themeGlow = "themeGlow"
+    static let usbProtection = "usbProtection"
+    static let usbAutoEject = "usbAutoEject"
+    static let clipboardGuard = "clipboardGuard"
+    static let useXProtect = "useXProtect"
+    static let settingsLock = "settingsLock"
+    static let yaraAutoInstallTried = "yaraAutoInstallTried"
+    static let cloudLookup = "cloudLookup"
+    static let onAccessScan = "onAccessScan"
+    static let helperAutoInstallTried = "helperAutoInstallTried"
+    static let cameraMicAlerts = "cameraMicAlerts"
+    static let helperWanted = "helperWanted"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -51,6 +62,14 @@ enum Prefs {
             browserProtection: true,
             ransomwareShield: true,
             autoInstallClamAV: true,
+            usbProtection: true,
+            usbAutoEject: true,
+            clipboardGuard: true,
+            useXProtect: true,
+            settingsLock: true,
+            cloudLookup: true,
+            onAccessScan: true,
+            cameraMicAlerts: true,
         ])
     }
 

@@ -4,9 +4,9 @@ import Combine
 import FoundationNetworking
 #endif
 
-/// Keeps the MalwareBazaar hash list (abuse.ch, CC0) on disk and in memory.
-/// First update downloads the full list (~45 MB zip, 1M+ hashes); later
-/// updates merge the last 48 hours. A fresh full download happens weekly.
+/// Keeps the known-malware SHA-256 list on disk and in memory. Every 6 hours it merges in a
+/// keyless, hourly-updated list of fresh malware hashes (see `downloadKeyless`); with an
+/// abuse.ch Auth-Key, MalwareBazaar's own 48-hour export (and a weekly full dump) too.
 @MainActor
 final class SignatureManager: ObservableObject {
     nonisolated static let fullURL = URL(string: "https://bazaar.abuse.ch/export/txt/sha256/full/")!
@@ -43,6 +43,13 @@ final class SignatureManager: ObservableObject {
             let store = self.store
             let loaded = await Task.detached(priority: .userInitiated) { store.loadFromDisk() }.value
             self.count = loaded
+            if store.tamperedOnDisk {
+                Notifier.post("Agamemnon's malware list was changed",
+                              "Something other than Agamemnon edited its signature database. It's being downloaded again.", critical: true)
+                ActivityLog.shared.add(.threat, "Signature database was changed outside Agamemnon", SignatureStore.databaseURL.path)
+                UserDefaults.standard.removeObject(forKey: self.lastUpdatedKey)
+                self.lastUpdated = nil
+            }
             self.urlhausCount = await Task.detached(priority: .utility) { URLhausStore.shared.loadFromDisk() }.value
             self.autoUpdateIfNeeded()
         }
@@ -55,7 +62,8 @@ final class SignatureManager: ObservableObject {
         updateURLhausIfNeeded()
         updateVirusShareIfNeeded()
         guard Prefs.bool(Prefs.autoUpdateSignatures) || count == 0 else { return }
-        if let last = lastUpdated, Date().timeIntervalSince(last) < 12 * 3600, count > 0 { return }
+        // The keyless list is refreshed hourly upstream; checking every 6 hours is plenty.
+        if let last = lastUpdated, Date().timeIntervalSince(last) < 6 * 3600, count > 0 { return }
         update()
     }
 
@@ -64,37 +72,49 @@ final class SignatureManager: ObservableObject {
         isUpdating = true
         lastError = nil
         let lastFull = UserDefaults.standard.object(forKey: lastFullKey) as? Date
-        let needFull = forceFull || count == 0 || lastFull == nil || Date().timeIntervalSince(lastFull!) > 7 * 86400
+        let needFull = AbuseCH.hasKey && (forceFull || count == 0 || lastFull == nil || Date().timeIntervalSince(lastFull!) > 7 * 86400)
         status = needFull ? "Downloading the full malware list…" : "Downloading new malware hashes…"
         let store = self.store
 
         Task {
             do {
                 let merged: [Hash256]
-                if needFull {
-                    let full = try await SignatureManager.downloadFull()
-                    self.status = "Adding the newest hashes…"
-                    let recent = (try? await SignatureManager.downloadRecent()) ?? []
+                // Keyless: an hourly list of fresh malware hashes (MalwareBazaar's last 120 days,
+                // URLhaus payloads, AlienVault OTX). With an abuse.ch key, MalwareBazaar's own
+                // feed is added on top. New hashes are merged into the list already on disk.
+                var recent = (try? await SignatureManager.downloadKeyless()) ?? []
+                var keyed: Error?
+                let full: [Hash256]? = needFull ? (try? await SignatureManager.downloadFull()) : nil
+                if AbuseCH.hasKey {
+                    do { recent += try await SignatureManager.downloadRecent() } catch { keyed = error }
+                }
+                if recent.isEmpty && full == nil { throw keyed ?? UpdateError.http(0) }
+                self.status = "Adding the newest hashes…"
+                if let full {
                     merged = await Task.detached(priority: .utility) { SignatureStore.sortedUnique(full + recent) }.value
                 } else {
-                    let recent = try await SignatureManager.downloadRecent()
+                    let fresh = recent
                     merged = await Task.detached(priority: .utility) {
-                        SignatureStore.sortedUnique(store.snapshot() + recent)
+                        SignatureStore.sortedUnique(store.snapshot() + fresh)
                     }.value
                 }
-                guard merged.count > 1000 else { throw UpdateError.suspiciousList }
+                if let keyed { self.lastError = "MalwareBazaar: \(keyed.localizedDescription) The keyless list was still updated." }
+                // A 48-hour export alone is a few hundred hashes; only a full list replaces everything.
+                guard merged.count > 1000 || (full == nil && merged.count >= self.count) else { throw UpdateError.suspiciousList }
                 self.status = "Saving…"
                 try await Task.detached(priority: .utility) {
                     try SignatureStore.write(merged, to: SignatureStore.databaseURL)
                     store.replace(with: merged)
                 }.value
                 let added = merged.count - self.count
+                await Task.detached(priority: .utility) { SignatureStore.recordIntegrity() }.value
                 self.count = merged.count
                 let now = Date()
                 self.lastUpdated = now
                 UserDefaults.standard.set(now, forKey: self.lastUpdatedKey)
-                if needFull { UserDefaults.standard.set(now, forKey: self.lastFullKey) }
+                if full != nil { UserDefaults.standard.set(now, forKey: self.lastFullKey) }
                 self.status = ""
+                if keyed == nil { self.lastError = nil }
                 ActivityLog.shared.add(.update, "Malware signatures updated",
                                        added > 0 ? "\(added.formatted()) new · \(merged.count.formatted()) total" : "\(merged.count.formatted()) known threats")
             } catch {
@@ -186,37 +206,47 @@ final class SignatureManager: ObservableObject {
         }
     }
 
-    nonisolated private static func check(_ response: URLResponse) throws {
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw UpdateError.http(http.statusCode)
+    /// Keyless hash list (github.com/romainmarcoux/malicious-hash, MIT): fresh malware SHA-256s
+    /// gathered hourly from MalwareBazaar, URLhaus payloads and AlienVault OTX. Split into files
+    /// of up to 131,072 hashes (-aa, -ab…); all of them are read.
+    nonisolated static let keylessBase = "https://raw.githubusercontent.com/romainmarcoux/malicious-hash/main/full-hash-sha256-"
+
+    nonisolated static func downloadKeyless() async throws -> [Hash256] {
+        var all: [Hash256] = []
+        for suffix in ["aa", "ab", "ac", "ad", "ae", "af"] {
+            var request = URLRequest(url: URL(string: keylessBase + suffix + ".txt")!)
+            request.timeoutInterval = 120
+            request.setValue("Agamemnon/3.1 (macOS antivirus)", forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { break }
+            all += SignatureStore.parseHashList(data)
         }
+        guard all.count > 500 else { throw UpdateError.suspiciousList }
+        return all
     }
 
+    /// Last 48 hours of new samples (the export abuse.ch documents).
     nonisolated static func downloadRecent() async throws -> [Hash256] {
-        var request = URLRequest(url: recentURL)
-        request.setValue("Agamemnon/1.0 (macOS antivirus)", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        try check(response)
+        let data = try await AbuseCH.fetch(.malwareBazaar, "recent.csv")
         return SignatureStore.parseHashList(data)
     }
+
+    /// The complete list. abuse.ch only shows the full-dump file names to signed-in users, so
+    /// the known spellings are tried in turn; when none exists, the weekly refresh is skipped and
+    /// the list keeps growing from the 48-hour exports instead (nothing already known is lost).
+    nonisolated static let fullExportNames = ["full.zip", "full.csv.zip", "sha256_full.zip", "full_sha256.txt.zip", "full.txt.zip"]
 
     nonisolated static func downloadFull() async throws -> [Hash256] {
-        var request = URLRequest(url: fullURL)
-        request.timeoutInterval = 600
-        request.setValue("Agamemnon/1.0 (macOS antivirus)", forHTTPHeaderField: "User-Agent")
-        let (tmp, response) = try await URLSession.shared.download(for: request)
-        try check(response)
-        let dir = AppPaths.newScratchDirectory("signatures")
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let zip = dir.appendingPathComponent("full.zip")
-        try FileManager.default.moveItem(at: tmp, to: zip)
-        let unzip = Shell.run("/usr/bin/unzip", ["-o", "-q", zip.path, "-d", dir.path], timeout: 300)
-        guard unzip.status == 0 else { throw UpdateError.unzip(unzip.stderr) }
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        guard let txt = files.first(where: { $0.pathExtension.lowercased() == "txt" }) else {
-            throw UpdateError.unzip("no hash list inside")
+        for name in fullExportNames {
+            do {
+                let zip = try await AbuseCH.fetch(.malwareBazaar, name, timeout: 900)
+                let list = try AbuseCH.unzipFirstList(zip)
+                let hashes = SignatureStore.parseHashList(list)
+                if hashes.count > 100_000 { return hashes }
+            } catch AbuseCH.Failure.notFound {
+                continue
+            }
         }
-        let data = try Data(contentsOf: txt)
-        return SignatureStore.parseHashList(data)
+        throw AbuseCH.Failure.notFound
     }
 }

@@ -203,6 +203,28 @@ final class BackgroundItemWatcher: ObservableObject {
         ]
     }
 
+    /// Other places that make code run automatically. Anything new here is reported and scanned.
+    static var pluginFolders: [String] {
+        [
+            "/Library/StartupItems",
+            "/Library/Security/SecurityAgentPlugins",     // runs inside the login window
+            "/Library/DirectoryServices/PlugIns",
+            "/Library/PrivilegedHelperTools",
+            AppPaths.home.appendingPathComponent("Library/Scripts/Folder Action Scripts").path,
+            AppPaths.home.appendingPathComponent("Library/Spotlight").path,
+            AppPaths.home.appendingPathComponent("Library/QuickLook").path,
+        ]
+    }
+
+    /// Files run by every new Terminal window or shell.
+    nonisolated static var shellProfiles: [String] {
+        [".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".bash_login",
+         ".config/fish/config.fish"].map { AppPaths.home.appendingPathComponent($0).path } + ["/etc/zshrc", "/etc/profile", "/etc/zprofile"]
+    }
+
+    /// Our own helper (Settings ▸ Self-protection) isn't reported.
+    nonisolated static let ownLabels: Set<String> = ["com.mirazbakis.Agamemnon.Helper"]
+
     init(vault: QuarantineVault) {
         self.vault = vault
     }
@@ -213,7 +235,8 @@ final class BackgroundItemWatcher: ObservableObject {
 
     func start() {
         guard !isRunning else { return }
-        let paths = BackgroundItemWatcher.folders.filter { FileManager.default.fileExists(atPath: $0) }
+        let paths = (BackgroundItemWatcher.folders + BackgroundItemWatcher.pluginFolders)
+            .filter { FileManager.default.fileExists(atPath: $0) }
         known = [:]
         for folder in paths { snapshot(folder) }
         let watcher = FolderWatcher(paths: paths, latency: 1.0) { [weak self] changed in
@@ -222,12 +245,100 @@ final class BackgroundItemWatcher: ObservableObject {
         guard watcher.start() else { return }
         self.watcher = watcher
         isRunning = true
+        profileState = BackgroundItemWatcher.readProfiles()
+        cronState = BackgroundItemWatcher.readCrontab()
+        loginHook = BackgroundItemWatcher.readLoginHook()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.poll() }
+        }
     }
 
     func stop() {
         watcher?.stop()
         watcher = nil
+        pollTimer?.invalidate()
+        pollTimer = nil
         isRunning = false
+    }
+
+    // MARK: Shell profiles, cron and login hooks (polled; they're single files)
+
+    private var pollTimer: Timer?
+    private var profileState: [String: String] = [:]
+    private var cronState = ""
+    private var loginHook = ""
+
+    nonisolated static func readProfiles() -> [String: String] {
+        var out: [String: String] = [:]
+        for path in shellProfiles {
+            if let text = try? String(contentsOfFile: path, encoding: .utf8) { out[path] = text }
+        }
+        return out
+    }
+
+    nonisolated static func readCrontab() -> String {
+        Shell.run("/usr/bin/crontab", ["-l"], timeout: 10).stdout
+    }
+
+    nonisolated static func readLoginHook() -> String {
+        let prefs = NSDictionary(contentsOfFile: "/Library/Preferences/com.apple.loginwindow.plist")
+        return [prefs?["LoginHook"], prefs?["LogoutHook"]].compactMap { $0 as? String }.joined(separator: "\n")
+    }
+
+    /// Lines a shell profile should never contain.
+    nonisolated private static let profileDangers: [(NSRegularExpression, String)] = [
+        (try! NSRegularExpression(pattern: #"(curl|wget)\b[^\n]*\|\s*(ba|z)?sh\b"#, options: .caseInsensitive), "downloads and runs code every time you open Terminal"),
+        (try! NSRegularExpression(pattern: #"base64\s+(-d|-D|--decode)"#, options: .caseInsensitive), "decodes a hidden command"),
+        (try! NSRegularExpression(pattern: #"DYLD_INSERT_LIBRARIES"#), "injects code into every program started from Terminal"),
+        (try! NSRegularExpression(pattern: #"alias\s+sudo="#), "replaces sudo (a trick to capture your password)"),
+        (try! NSRegularExpression(pattern: #"nohup\s+[^\n]*(/tmp/|/Users/Shared/|/\.[a-z])"#, options: .caseInsensitive), "starts a hidden background program"),
+        (try! NSRegularExpression(pattern: #"osascript\s+-e"#), "runs AppleScript"),
+    ]
+
+    nonisolated static func dangers(in added: String) -> [String] {
+        let range = NSRange(added.startIndex..., in: added)
+        return profileDangers.filter { $0.0.firstMatch(in: added, range: range) != nil }.map(\.1)
+    }
+
+    private func poll() {
+        let profiles = BackgroundItemWatcher.readProfiles()
+        for (path, text) in profiles where profileState[path] != text {
+            let before = Set((profileState[path] ?? "").components(separatedBy: .newlines))
+            let added = text.components(separatedBy: .newlines).filter { !before.contains($0) }.joined(separator: "\n")
+            let found = BackgroundItemWatcher.dangers(in: added)
+            if !found.isEmpty {
+                report(label: (path as NSString).lastPathComponent, path: path, program: nil,
+                       verdict: "Suspicious: it " + found.joined(separator: ", "), critical: true)
+            }
+        }
+        profileState = profiles
+
+        let cron = BackgroundItemWatcher.readCrontab()
+        if cron != cronState {
+            let before = Set(cronState.components(separatedBy: .newlines))
+            let added = cron.components(separatedBy: .newlines).filter { !$0.isEmpty && !$0.hasPrefix("#") && !before.contains($0) }
+            if !added.isEmpty {
+                let found = BackgroundItemWatcher.dangers(in: added.joined(separator: "\n"))
+                report(label: "Scheduled task (cron)", path: "crontab", program: added.first,
+                       verdict: found.isEmpty ? "New scheduled task" : "Suspicious: it " + found.joined(separator: ", "),
+                       critical: !found.isEmpty)
+            }
+            cronState = cron
+        }
+
+        let hook = BackgroundItemWatcher.readLoginHook()
+        if hook != loginHook, !hook.isEmpty {
+            report(label: "Login hook", path: "/Library/Preferences/com.apple.loginwindow.plist", program: hook,
+                   verdict: "Runs as root every time someone logs in. Rarely used by real apps.", critical: true)
+        }
+        loginHook = hook
+    }
+
+    private func report(label: String, path: String, program: String?, verdict: String, critical: Bool) {
+        items.insert(Item(date: Date(), plistPath: path, label: label, program: program, verdict: verdict), at: 0)
+        if items.count > 50 { items.removeLast(items.count - 50) }
+        ActivityLog.shared.add(critical ? .threat : .background, "\(label) changed", verdict)
+        Notifier.post(critical ? "Suspicious startup change: \(label)" : "\(label) changed", verdict, critical: critical)
     }
 
     private func modificationDate(_ path: String) -> Date? {
@@ -235,13 +346,24 @@ final class BackgroundItemWatcher: ObservableObject {
     }
 
     private func snapshot(_ folder: String) {
-        for name in (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [] where name.hasSuffix(".plist") {
+        let everything = BackgroundItemWatcher.pluginFolders.contains(folder)
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [] where everything || name.hasSuffix(".plist") {
             let path = folder + "/" + name
             known[path] = modificationDate(path) ?? Date()
         }
     }
 
     private func handle(_ paths: [String]) {
+        // Plug-ins, helper tools and startup items: anything new at the top of those folders.
+        for path in Set(paths) {
+            let parent = (path as NSString).deletingLastPathComponent
+            guard BackgroundItemWatcher.pluginFolders.contains(parent), known[path] == nil,
+                  FileManager.default.fileExists(atPath: path) else { continue }
+            known[path] = Date()
+            let name = (path as NSString).lastPathComponent
+            if name.hasPrefix(".") || BackgroundItemWatcher.ownLabels.contains(name) { continue }
+            inspect(path, isNew: true, plugin: true)
+        }
         for path in Set(paths) where path.hasSuffix(".plist") {
             guard BackgroundItemWatcher.folders.contains((path as NSString).deletingLastPathComponent) else { continue }
             guard let modified = modificationDate(path) else { known[path] = nil; continue }
@@ -252,11 +374,36 @@ final class BackgroundItemWatcher: ObservableObject {
         }
     }
 
-    private func inspect(_ path: String, isNew: Bool) {
+    /// Launch item settings that real apps don't use.
+    nonisolated static func oddities(_ dict: [String: Any], program: String?) -> [String] {
+        var out: [String] = []
+        let env = dict["EnvironmentVariables"] as? [String: Any] ?? [:]
+        if env.keys.contains(where: { $0.hasPrefix("DYLD_") }) { out.append("injects code into another program (DYLD)") }
+        let args = ((dict["ProgramArguments"] as? [String]) ?? []).joined(separator: " ").lowercased()
+        if let program, BehaviorRules.isOddLocation(program) { out.append("runs a program from a hidden or temporary folder") }
+        if args.contains("curl ") || args.contains("wget ") { out.append("downloads something each time it starts") }
+        if args.contains("base64") || args.contains("osascript -e") || args.contains(" -c \"") && args.contains("http") {
+            out.append("runs a hidden command")
+        }
+        if let program, ["sh", "bash", "zsh", "python3", "osascript"].contains((program as NSString).lastPathComponent),
+           args.contains("/tmp/") || args.contains("/users/shared/") {
+            out.append("runs a script from a shared or temporary folder")
+        }
+        return out
+    }
+
+    private func inspect(_ path: String, isNew: Bool, plugin: Bool = false) {
         let dict = NSDictionary(contentsOfFile: path) as? [String: Any] ?? [:]
         let label = dict["Label"] as? String ?? (path as NSString).lastPathComponent
-        let program = (dict["Program"] as? String) ?? (dict["ProgramArguments"] as? [String])?.first
-        let item = Item(date: Date(), plistPath: path, label: label, program: program, verdict: "Checking…")
+        if BackgroundItemWatcher.ownLabels.contains(label) { return }
+        let program = plugin ? path : ((dict["Program"] as? String) ?? (dict["ProgramArguments"] as? [String])?.first)
+        let odd = plugin ? [] : BackgroundItemWatcher.oddities(dict, program: program)
+        if !odd.isEmpty {
+            Notifier.post("Suspicious background item: \(label)", "It " + odd.joined(separator: ", ") + ".", critical: true)
+            ActivityLog.shared.add(.threat, "Suspicious background item: \(label)", odd.joined(separator: ", "))
+        }
+        let item = Item(date: Date(), plistPath: path, label: label, program: program,
+                        verdict: odd.isEmpty ? "Checking…" : "Suspicious: it " + odd.joined(separator: ", "))
         items.insert(item, at: 0)
         if items.count > 50 { items.removeLast(items.count - 50) }
 
@@ -276,7 +423,7 @@ final class BackgroundItemWatcher: ObservableObject {
             let result = ScanEngine().run(roots: scanRoots, options: scanOptions) { _ in }
             Task { @MainActor in
                 guard let self else { return }
-                var verdict = "No known threats"
+                var verdict = odd.isEmpty ? "No known threats" : "Suspicious: it " + odd.joined(separator: ", ")
                 if let threat = result.detections.first(where: { $0.level != .suspicious }) {
                     if (try? self.vault.quarantine(threat)) != nil {
                         verdict = "Quarantined: \(threat.threatName)"

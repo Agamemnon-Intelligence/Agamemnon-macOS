@@ -45,7 +45,8 @@ xcodegen generate
 xcodebuild -project Agamemnon.xcodeproj -scheme Agamemnon -configuration Debug build
 ```
 
-- If you add, move or delete source files, nothing needs editing: `project.yml` picks up everything under `App/`. Run `xcodegen generate` again.
+- If you add, move or delete source files, nothing needs editing: `project.yml` picks up everything under `App/` (and `Helper/` for the protection helper, embedded as `Contents/MacOS/AgamemnonHelper`). Run `xcodegen generate` again.
+- `scripts/build-signed.sh "<identity>"` builds a Release copy signed with a certificate from the keychain (app and helper).
 - Never commit `Agamemnon.xcodeproj/`, `build/`, `*.dmg` or signing material.
 - GitHub Actions is the reference build: a universal binary (arm64 + x86_64) built with the latest Xcode. If you can't build locally (for example on Linux), say so plainly. Don't claim code compiles when you couldn't compile it.
 - Signing secrets (`DEVELOPER_ID_P12`, `DEVELOPER_ID_P12_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`) are optional. Without them CI makes an ad-hoc signed build.
@@ -92,12 +93,12 @@ This is security software. A bug can delete user files or let malware through. F
 3. **Suspicious ≠ malicious.** Gatekeeper findings (unsigned or un-notarized) and ClamAV `PUA.*` hits are `.suspicious`. They are never auto-quarantined unless the user turns on that setting.
 4. **Keep the archive safety limits** in `ArchiveInspector`: list before extracting, a 4 GB expanded-size cap, 100,000 entries, 3 levels of nesting, timeouts, read-only `-nobrowse` disk image mounts, skipping encrypted images and archives instead of prompting, and always cleaning up scratch folders and detaching images. Don't loosen these without a clear reason in the PR.
 5. **Never execute, open or `Process`-launch a file being scanned.** Only read it, hash it, or hand it to the unpack and assessment tools.
-6. **Admin rights** go only through `Privileged.run`, only for quarantine or restore in protected locations and for removing the DNS profile. Shell-quote every path with `Shell.quote`.
+6. **Admin rights** go only through `Privileged.run`, only for quarantine or restore in protected locations, for removing the DNS profile, and for installing or removing the protection helper (`SelfProtection`). Shell-quote every path with `Shell.quote`. The helper (`Helper/main.swift`) only watches and reports; it must never stop, quarantine or delete anything itself.
 7. **Privacy:**
    - No telemetry, analytics, crash reporters or file uploads.
-   - The only network calls are the MalwareBazaar exports, VirusShare's MD5 lists (`virusshare.com/hashfiles/VirusShare_NNNNN.md5`, spaced out, resuming), the URLhaus `text_online` list, installing ClamAV once (Homebrew, or the latest `*.macos.universal.pkg` from ClamAV's GitHub releases, which must pass `pkgutil --check-signature` as Cisco's Developer ID), ClamAV's `freshclam`, and the GitHub avatars on the About page. Don't add more without discussing it.
+   - The only network calls are the MalwareBazaar and URLhaus exports (abuse.ch, with the user's own Auth-Key from the keychain), the MalwareBazaar cloud check (`CloudLookup`: SHA-256 of unsigned programs only, never file contents), GitHub's latest-release API and release downloads for Agamemnon's own updates, Sparkle update feeds (`SUFeedURL`) of installed apps, installing yara once with Homebrew, VirusShare's MD5 lists (`virusshare.com/hashfiles/VirusShare_NNNNN.md5`, spaced out, resuming), the URLhaus `text_online` list, installing ClamAV once (Homebrew, or the latest `*.macos.universal.pkg` from ClamAV's GitHub releases, which must pass `pkgutil --check-signature` as Cisco's Developer ID), ClamAV's `freshclam`, and the GitHub avatars on the About page. Don't add more without discussing it.
 8. **Signature data:**
-   - The MalwareBazaar exports at `https://bazaar.abuse.ch/export/txt/sha256/{full,recent}/` are CC0 and work without an auth key. The newer `mb-api.abuse.ch/v2` exports need a key, so don't switch to them silently.
+   - abuse.ch retired its keyless exports in October 2026 (`410 Gone`). MalwareBazaar and URLhaus are now downloaded from `https://{mb-api,urlhaus-api}.abuse.ch/v2/files/exports/<key>/…` with the user's free Auth-Key (see `AbuseCH.swift`). Never ship a key in the app.
    - Keep the binary format: sorted 32-byte records. Loading it and doing lookups depend on that format.
    - VirusShare hashes are MD5 and live separately in `Signatures/VirusShare/`: 256 sorted bucket files of 16-byte records, memory-mapped for lookups. Never load the whole list into memory.
 9. **Don't overstate protection** in the UI or docs. Known limits are listed in HOW_IT_WORKS.md: hash matching only catches known samples, download protection acts just after the download finishes rather than blocking it, encrypted DNS needs the user's approval, and admin alerts need an admin account.

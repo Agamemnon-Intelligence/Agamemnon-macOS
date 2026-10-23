@@ -254,7 +254,34 @@ final class SignatureStore {
     func loadFromDisk() -> Int {
         guard let loaded = try? SignatureStore.read(from: SignatureStore.databaseURL) else { return 0 }
         replace(with: loaded)
+        if !SignatureStore.integrityMatches() { tamperedOnDisk = true }
         return loaded.count
+    }
+
+    // MARK: - Tamper check
+
+    /// Set when the database file on disk isn't the one Agamemnon last saved (malware deleting
+    /// its own hash from the list, for example). It's still used, but re-downloaded and reported.
+    private(set) var tamperedOnDisk = false
+
+    private static let integrityKey = "signatures.sha256"
+
+    private static func fileDigest() -> String? {
+        (try? FileHasher.sha256(of: databaseURL))?.hex
+    }
+
+    /// Remembers the digest of the database Agamemnon just wrote.
+    static func recordIntegrity() {
+        if let digest = fileDigest() { UserDefaults.standard.set(digest, forKey: integrityKey) }
+    }
+
+    /// True when the file matches the last recorded digest (or none was recorded yet).
+    static func integrityMatches() -> Bool {
+        guard let expected = UserDefaults.standard.string(forKey: integrityKey) else {
+            recordIntegrity()
+            return true
+        }
+        return fileDigest() == expected
     }
 
     // MARK: - Binary format: N × 32 raw bytes, sorted.
@@ -291,28 +318,27 @@ final class SignatureStore {
         try out.write(to: url, options: .atomic)
     }
 
-    /// Extracts every 64-hex-character line from a MalwareBazaar text export.
+    /// Extracts every SHA-256 from a MalwareBazaar export: the plain-text list (one hash per
+    /// line) or the CSV (the hash is one of several columns, next to MD5/SHA-1/TLSH values).
+    /// Only runs of exactly 64 hex digits count, so the other hash columns are ignored.
     static func parseHashList(_ data: Data) -> [Hash256] {
         var result: [Hash256] = []
         result.reserveCapacity(data.count / 65)
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             let p = raw.bindMemory(to: UInt8.self)
-            var lineStart = 0
             let n = p.count
             var i = 0
-            while i <= n {
-                if i == n || p[i] == 0x0A {
-                    var lineEnd = i
-                    if lineEnd > lineStart, p[lineEnd - 1] == 0x0D { lineEnd -= 1 }
-                    // Skip quotes some CSV exports wrap around values.
-                    var s = lineStart
-                    while s < lineEnd, p[s] == 0x22 || p[s] == 0x20 { s += 1 }
-                    if lineEnd - s >= 64, p[s] != 0x23, let h = Hash256(hexBytes: p, offset: s) {
-                        result.append(h)
-                    }
-                    lineStart = i + 1
-                }
-                i += 1
+            var lineStart = true
+            var comment = false
+            while i < n {
+                let c = p[i]
+                if c == 0x0A { lineStart = true; comment = false; i += 1; continue }
+                if lineStart { comment = c == 0x23; lineStart = false }   // "#" header lines
+                if comment || Hash256.nibble(c) == nil { i += 1; continue }
+                var j = i
+                while j < n, Hash256.nibble(p[j]) != nil { j += 1 }
+                if j - i == 64, let h = Hash256(hexBytes: p, offset: i) { result.append(h) }
+                i = j
             }
         }
         return result

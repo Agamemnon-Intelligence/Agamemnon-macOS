@@ -120,12 +120,14 @@ final class BehaviorMonitor: ObservableObject {
         var done: [String] = []
         let p = report.process
 
-        if BehaviorMonitor.mayStop(p) {
+        // Only signal a PID that still belongs to the same program (PIDs are reused).
+        if BehaviorMonitor.isSameProcess(p.pid, path: p.path), BehaviorMonitor.mayStop(p) {
             kill(p.pid, SIGKILL)
             done.append("stopped \(p.name)")
         }
 
         if let culpritPath = report.culprit, let culpritPID = report.culpritPID, culpritPID != p.pid,
+           BehaviorMonitor.isSameProcess(culpritPID, path: culpritPath),
            BehaviorMonitor.mayQuarantine(culpritPath) {
             kill(culpritPID, SIGKILL)
             done.append("stopped \((culpritPath as NSString).lastPathComponent)")
@@ -197,6 +199,53 @@ final class BehaviorMonitor: ObservableObject {
 
     func clearAlerts() { alerts.removeAll() }
 
+    // MARK: - Live events from the protection helper
+
+    /// A new program just started (from Endpoint Security): check it now rather than on the
+    /// next once-a-second pass.
+    func checkNow(_ pid: pid_t) {
+        worker?.checkNow(pid)
+    }
+
+    private var sensitiveHistory: [String: (Date, Set<String>)] = [:]
+
+    /// A program nobody vouches for (or a system tool such as osascript or sqlite3) opened
+    /// saved passwords, browser data, wallets, notes or SSH keys.
+    func sensitiveAccess(pid: pid_t, ppid: pid_t, path: String, category: String, file: String, systemTool: Bool) {
+        guard isRunning else { return }
+        // Tools like cp, cat and sqlite3 are often gone before the report arrives; judge them
+        // from the report and from the parent that started them, which usually still runs.
+        let p = ProcessList.info(pid) ?? RunningProcess(pid: pid, ppid: ppid, uid: getuid(), started: 0,
+                                                        path: path, arguments: [path])
+        if isTrusted(p.path) { return }
+        let ancestors = ProcessList.ancestors(of: p)
+        // Who's really behind it: the program itself, or the unsigned program that started the tool.
+        var culprit: (String, pid_t)?
+        if !systemTool, !BehaviorRules.isPackageManaged(p.path) {
+            culprit = (p.path, p.pid)
+        } else {
+            culprit = BehaviorWorker.responsible(for: p, ancestors: ancestors)
+        }
+        if let c = culprit, isTrusted(c.0) { return }
+        let key = culprit?.0 ?? p.path
+        let now = Date()
+        var entry = sensitiveHistory[key] ?? (now, [])
+        if now.timeIntervalSince(entry.0) > 120 { entry = (now, []) }
+        entry.1.insert(category)
+        sensitiveHistory[key] = entry
+        if sensitiveHistory.count > 500 { sensitiveHistory.removeAll() }
+
+        let highValue: Set<String> = ["keychain", "crypto wallets", "browser passwords"]
+        let confident = culprit != nil && (entry.1.count >= 2 || highValue.contains(category))
+        let finding = BehaviorFinding(
+            rule: "stealer-file-access",
+            title: "Program reading your \(entry.1.sorted().joined(separator: ", "))",
+            explanation: "A program that no known developer has signed opened \((file as NSString).lastPathComponent), where your \(category) are kept. Stealers do exactly this.",
+            families: "AMOS, Poseidon, Banshee, Cuckoo, other stealers",
+            confidence: confident ? .high : .medium)
+        handle(BehaviorWorker.Report(process: p, finding: finding, culprit: culprit?.0, culpritPID: culprit?.1))
+    }
+
     private func update(_ id: UUID, outcome: String) {
         guard let index = alerts.firstIndex(where: { $0.id == id }) else { return }
         alerts[index].outcome = outcome
@@ -232,6 +281,12 @@ final class BehaviorMonitor: ObservableObject {
         if identity.signer == .apple { return false }
         if manual { return true }
         return identity.isUnvouched && !BehaviorRules.isPackageManaged(p.path)
+    }
+
+    /// The process with this PID is (still) running this program.
+    nonisolated static func isSameProcess(_ pid: pid_t, path: String) -> Bool {
+        guard pid > 1, let live = ProcessList.executablePath(pid) else { return false }
+        return live == path
     }
 
     nonisolated static func mayQuarantine(_ path: String) -> Bool {
@@ -296,6 +351,15 @@ final class BehaviorWorker {
         timer = nil
     }
 
+    func checkNow(_ pid: pid_t) {
+        queue.async { [weak self] in
+            guard let self, let p = ProcessList.info(pid), !self.seen.contains(p.key) else { return }
+            self.seen.insert(p.key)
+            self.checked += 1
+            self.inspect(p)
+        }
+    }
+
     private func tick() {
         ticks += 1
         let pids = ProcessList.allPIDs()
@@ -334,6 +398,20 @@ final class BehaviorWorker {
             }
         }
 
+        // 1b. Cloud check (MalwareBazaar live) for programs nobody vouches for.
+        if CloudLookup.isEnabled, BehaviorRules.isUserLandUnvouched(p), !BehaviorRules.isPackageManaged(p.path),
+           let sha = try? FileHasher.sha256(of: URL(fileURLWithPath: p.path)).hex {
+            Task { [weak self] in
+                guard let name = await CloudLookup.lookup(sha256: sha) else { return }
+                self?.queue.async {
+                    let finding = BehaviorFinding(rule: "known-malware", title: "Known malware is running",
+                                                  explanation: "This program matches a malware sample reported to MalwareBazaar (\(name)).",
+                                                  families: name, confidence: .high)
+                    self?.emit(p, finding, culprit: (p.path, p.pid))
+                }
+            }
+        }
+
         // 2. Pattern rules on the program, or on the script an interpreter is running.
         if Prefs.bool(Prefs.patternRules), !BehaviorRules.isSystemPath(p.path) || BehaviorMonitor.interpreters.contains(p.name.lowercased()) {
             for file in patternTargets(p) where !patternChecked.contains(file) {
@@ -356,7 +434,7 @@ final class BehaviorWorker {
         // 3. Behaviour rules.
         let ancestors = ProcessList.ancestors(of: p)
         guard let finding = BehaviorRules.evaluate(p, ancestors: ancestors) else { return }
-        emit(p, finding, culprit: responsible(for: p, ancestors: ancestors))
+        emit(p, finding, culprit: BehaviorWorker.responsible(for: p, ancestors: ancestors))
     }
 
     /// The program itself, or for interpreters (bash, python, node, osascript…) the script
@@ -371,7 +449,7 @@ final class BehaviorWorker {
     }
 
     /// The nearest unsigned, user-installed program in the chain (the process itself or a parent).
-    private func responsible(for p: RunningProcess, ancestors: [RunningProcess]) -> (String, pid_t)? {
+    static func responsible(for p: RunningProcess, ancestors: [RunningProcess]) -> (String, pid_t)? {
         for candidate in [p] + ancestors {
             if BehaviorRules.isUserLandUnvouched(candidate),
                !BehaviorMonitor.interpreters.contains(candidate.name.lowercased()) {

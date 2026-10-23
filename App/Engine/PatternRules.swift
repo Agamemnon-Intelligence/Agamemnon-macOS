@@ -21,7 +21,7 @@ enum PatternRules {
     struct Rule {
         let id: String
         /// Shown as the threat name.
-        let name: String
+        var name: String
         /// Which kinds of file the rule applies to.
         let kinds: Set<FileKind>
         /// Every one of these must appear (all lower-case).
@@ -141,7 +141,78 @@ enum PatternRules {
              oneOf(["runatload", "keepalive", "hidden:true", "hidden: true"]),
              oneOf(["/users/shared/.", "~/.", "$home/.", "/library/application support/."]),
              level: .suspicious),
+        // JavaScript-for-Automation version of the fake password prompt.
+        Rule("fake-password-prompt-jxa", "MacOS.Stealer.PasswordPhish",
+             all: ["displaydialog", "hiddenanswer"],
+             oneOf(["login data", "cookies", "keychain", "wallet", "-authonly", "/tmp/", "curl"], 2)),
+        // AMOS, Poseidon, Banshee and Cuckoo check the typed password with dscl before stealing.
+        Rule("password-check", "MacOS.Stealer.PasswordCheck",
+             all: ["dscl", "-authonly"], oneOf(["display dialog", "displaydialog", "hidden answer", "hiddenanswer"])),
+        // Scripts that shut down or reconfigure security tools before doing anything else.
+        Rule("kill-security-tools", "MacOS.Tamper.KillSecurityTools", kinds: [.script],
+             oneOf(["killall", "pkill", "kill -9", "launchctl bootout", "launchctl unload"]),
+             oneOf(["agamemnon", "little snitch", "littlesnitch", "lulu.app", "blockblock", "malwarebytes", "knockknock", "oversight"]),
+             oneOf(["curl", "chmod +x", "/tmp/", "base64"]),
+             level: .suspicious),
+        Rule("agamemnon-tamper", "MacOS.Tamper.DisableAntivirus", kinds: [.script],
+             all: ["com.mirazbakis.agamemnon"], oneOf(["defaults write", "defaults delete", "rm -rf", "launchctl bootout", "launchctl remove"]),
+             level: .suspicious),
+        // ChromeLoader and similar adware: a browser started with an extension from a hidden folder.
+        Rule("extension-sideload", "MacOS.Adware.ChromeLoader", kinds: [.script],
+             all: ["--load-extension"], oneOf(["/tmp/", "/private/var/folders/", "/users/shared/", "base64", "$tmpdir"]),
+             level: .suspicious),
+        // Script ransomware: encrypts files in a loop and leaves a ransom note.
+        Rule("script-ransomware", "MacOS.Ransomware.Encryptor", kinds: [.script],
+             all: ["openssl enc"], oneOf(["-aes-256", "aes-256-cbc", "-aes256"]),
+             oneOf(["find ", "for f in", "for file in", "os.walk", "glob("]),
+             oneOf(["readme", "restore your", "bitcoin", "decrypt your", "ransom", ".locked", ".encrypted"])),
+        // Python implants that only exist in decoded form.
+        Rule("python-exec-payload", "MacOS.Backdoor.PythonLoader", kinds: [.script],
+             oneOf(["exec(base64.b64decode", "exec(zlib.decompress", "exec(__import__('base64')", "exec(marshal.loads",
+                    "exec(__import__(\"base64\")", "exec(codecs.decode"]),
+             oneOf(["urllib.request", "urlopen(", "requests.get", "requests.post", "socket.socket", "http.client"])),
+        Rule("node-eval-payload", "MacOS.Backdoor.NodeLoader", kinds: [.script],
+             oneOf(["eval(atob(", "eval(buffer.from(", "new function(atob(", "eval(require('zlib')"]),
+             oneOf(["require('https')", "require(\"https\")", "require('http')", "fetch(", "child_process"]),
+             level: .suspicious),
+        // Spyware: screenshots taken in a loop and sent somewhere.
+        Rule("screen-spy", "MacOS.Spyware.ScreenGrabber", kinds: [.script],
+             all: ["screencapture -x"], oneOf(["while true", "while :", "sleep ", "time.sleep", "setinterval"]),
+             oneOf(dropChannels + ["curl -f", "curl -x post", "@/tmp/", "requests.post", "smtplib"])),
+        // Python keyloggers.
+        Rule("py-keylogger", "MacOS.Spyware.Keylogger", kinds: [.script],
+             all: ["pynput"], oneOf(["keyboard.listener", "on_press"]),
+             oneOf(dropChannels + ["smtplib", "requests.post", "urllib.request", "ftplib"])),
+        // Safari and system cookies copied and packed up.
+        Rule("safari-loot", "MacOS.Stealer.SafariData", kinds: [.script],
+             oneOf(["cookies.binarycookies", "library/safari/history.db", "library/safari/formvalues"]),
+             oneOf(["ditto -c -k", "zip -r", "@/tmp/", "cp -r"]), oneOf(exfil + dropChannels),
+             level: .suspicious),
+        // Cron job that downloads and runs code every so often.
+        Rule("cron-downloader", "MacOS.Persistence.CronDownloader", kinds: [.script],
+             all: ["crontab"], oneOf(["curl", "wget"]), oneOf(["| sh", "|sh", "| bash", "|bash", "| zsh", "| python", "| osascript"]),
+             level: .suspicious),
+        // Root daemon dropped from a temporary folder.
+        Rule("daemon-dropper", "MacOS.Persistence.DaemonDropper", kinds: [.script],
+             all: ["/library/launchdaemons/"], oneOf(["launchctl load", "launchctl bootstrap"]),
+             oneOf(["curl", "chmod +x", "base64"]), oneOf(tempFolders),
+             level: .suspicious),
+        // DYLD injection into other apps (persists by hijacking a trusted program).
+        Rule("dyld-inject", "MacOS.Persistence.DylibInjection", kinds: [.script],
+             all: ["dyld_insert_libraries"], oneOf(["launchctl setenv", "environmentvariables", "launchagents", ".zshrc", ".bash_profile"]),
+             level: .suspicious),
     ]
+
+    /// Payloads that were hidden (base64, hex, split strings…) and, once decoded, download or
+    /// run something. Hiding a command like this has no innocent use in a small script.
+    static let hiddenPayloadRule = Rule("hidden-payload", "MacOS.Downloader.ObfuscatedScript", kinds: [.script],
+        oneOf(["curl ", "curl\t", "wget ", "osascript", "nscurl", "/dev/tcp/", "urllib.request", "require('https')"]),
+        oneOf(["| sh", "|sh", "| bash", "|bash", "| zsh", "chmod +x", "chmod 777", "open -a", "osascript -e", "launchctl",
+               "nohup ", "xattr -c", "xattr -d com.apple.quarantine"]),
+        level: .suspicious)
+
+    /// Scripts bigger than this aren't decoded (decoding is the slowest part of the rules).
+    static let maxDeobfuscateBytes = 1024 * 1024
 
     // MARK: - Matching
 
@@ -151,7 +222,7 @@ enum PatternRules {
         let ext = url.pathExtension.lowercased()
         let scriptExts: Set<String> = ["sh", "command", "tool", "zsh", "bash", "applescript", "scpt", "py", "js", "mjs", "cjs", "rb", "pl"]
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        let head = (try? handle.read(upToCount: 8)) ?? Data()
+        let head = (try? handle.read(upToCount: 16)) ?? Data()
         try? handle.close()
         guard head.count >= 4 else { return nil }
         let magic = head.withUnsafeBytes { $0.load(as: UInt32.self) }
@@ -160,10 +231,17 @@ enum PatternRules {
         // architecture count; a class file follows it with its version (major 45 or higher).
         if head.starts(with: [0xca, 0xfe, 0xba, 0xbe]) {
             guard head.count >= 8 else { return nil }
-            let archCount = head.dropFirst(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+            let archCount = head.dropFirst(4).prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
             if archCount == 0 || archCount >= 30 { return nil }
         }
-        if machO.contains(magic) { return size <= maxProgramBytes ? .program : nil }
+        if machO.contains(magic) {
+            // Object files (.o) are pieces of a program being built; they can't run.
+            if [0xfeedfacf, 0xfeedface].contains(magic), head.count >= 16 {
+                let fileType = head.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 12, as: UInt32.self) }
+                if fileType == 1 { return nil }   // MH_OBJECT
+            }
+            return size <= maxProgramBytes ? .program : nil
+        }
         if head.starts(with: [0x23, 0x21]) || scriptExts.contains(ext) { return size <= maxScriptBytes ? .script : nil }
         return nil
     }
@@ -181,7 +259,31 @@ enum PatternRules {
             if bigScript && rule.level == .suspicious { continue }
             if matches(rule, data) { return rule }
         }
+        // Look again with hidden strings decoded.
+        guard kind == .script, raw.count <= maxDeobfuscateBytes else { return nil }
+        let revealed = Deobfuscator.reveal(raw)
+        guard !revealed.isEmpty else { return nil }
+        let combined = data + revealed
+        for rule in rules where rule.kinds.contains(kind) {
+            if bigScript && rule.level == .suspicious { continue }
+            if matches(rule, combined) {
+                var hidden = rule
+                hidden.name += ".Obfuscated"
+                return hidden
+            }
+        }
+        if !bigScript, matchesOnlyWhenDecoded(hiddenPayloadRule, visible: data, revealed: revealed) { return hiddenPayloadRule }
         return nil
+    }
+
+    /// Every group must be satisfied by strings that appear in the decoded text but nowhere in
+    /// the visible script, so ordinary commands written in plain sight never count as hidden.
+    private static func matchesOnlyWhenDecoded(_ rule: Rule, visible: Data, revealed: Data) -> Bool {
+        for group in rule.groups {
+            let hidden = group.needles.filter { contains(revealed, $0) && !contains(visible, $0) }
+            if hidden.count < group.minimum { return false }
+        }
+        return true
     }
 
     private static func matches(_ rule: Rule, _ data: Data) -> Bool {
@@ -228,11 +330,23 @@ enum PatternRules {
             if BehaviorRules.isSystemPath(url.path) { return nil }
             let identity = CodeIdentity.of(url.path)
             guard identity.isUnvouched else { return nil }
-            // Every Agamemnon build contains these strings (they're its rules), including
-            // older versions, so its own program is never judged by them.
-            if identity.identifier == CodeIdentity.ownBundleID { return nil }
+            // Every Agamemnon build contains these strings (they're its rules), so its own
+            // programs aren't judged by them. A name is easy to fake in an ad-hoc signature, so
+            // it has to be a genuine build too: byte-identical to the running copy, or from the
+            // same developer team.
+            if CodeIdentity.isOwnProgram(url.path, identity: identity) { return nil }
         }
-        guard let rule = match(url, kind: kind, size: size) else { return nil }
-        return Detection(fileURL: outer, innerPath: inner, threatName: rule.name, engine: "Agamemnon Patterns", level: rule.level)
+        let rule = match(url, kind: kind, size: size)
+        if let rule, rule.level == .malicious || kind != .program {
+            return Detection(fileURL: outer, innerPath: inner, threatName: rule.name, engine: "Agamemnon Patterns", level: rule.level)
+        }
+        // Programs: what they're built to do. A malicious verdict here outranks a warning-level rule.
+        if kind == .program, let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+           let report = MachOInspector.inspect(data), let verdict = MachOInspector.verdict(report),
+           rule == nil || verdict.level == .malicious {
+            return Detection(fileURL: outer, innerPath: inner, threatName: verdict.name,
+                             engine: "Agamemnon Analysis", level: verdict.level)
+        }
+        return rule.map { Detection(fileURL: outer, innerPath: inner, threatName: $0.name, engine: "Agamemnon Patterns", level: $0.level) }
     }
 }

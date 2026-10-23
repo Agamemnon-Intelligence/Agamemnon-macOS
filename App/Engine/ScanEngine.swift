@@ -14,6 +14,11 @@ final class ScanEngine {
         var appSignatureCheck = false
         /// Agamemnon's built-in pattern rules for scripts and unsigned programs.
         var patternRules = true
+        /// Apple's XProtect YARA rules, run with yara when it's installed.
+        var useXProtect = true
+        /// Only look at files that can run or carry something that runs (programs, scripts,
+        /// apps, installers, archives, disk images). Used for USB drives full of photos.
+        var riskyOnly = false
         var exclusions: [String] = []
         /// Files bigger than this aren't hashed (malware samples are rarely huge).
         var maxHashBytes: Int64 = 1024 * 1024 * 1024
@@ -41,6 +46,9 @@ final class ScanEngine {
     private let cancelLock = NSLock()
     private var cancelled = false
     private var clamProcess: LineProcess?
+    /// Programs and scripts seen by this run, for Apple's XProtect rules at the end.
+    private let candidateLock = NSLock()
+    private var xprotectCandidates: [String] = []
 
     // Per-run state (only touched from the scanning thread).
     private var options = Options()
@@ -82,6 +90,7 @@ final class ScanEngine {
         archivesOpened = 0
         skipped = []
         pendingLog = []
+        xprotectCandidates = []
 
         // 1. Built-in engine.
         phase = "Checking files"
@@ -119,6 +128,21 @@ final class ScanEngine {
             if let clamError { log(.skipped, "ClamAV: \(clamError)") }
         }
 
+        // 3. Apple's XProtect rules over every program and script found.
+        if options.useXProtect, XProtectRules.shared.isReady, !isCancelled {
+            candidateLock.lock(); let files = xprotectCandidates; candidateLock.unlock()
+            if !files.isEmpty {
+                phase = "Apple XProtect rules"
+                log(.info, "Checking \(files.count.formatted()) programs and scripts with Apple's XProtect rules")
+                report(force: true, path: "")
+                let hits = XProtectRules.shared.scan(files: files, register: registerExternal)
+                for hit in hits where !detections.contains(where: { $0.fileURL.path == hit.path }) {
+                    add(Detection(fileURL: URL(fileURLWithPath: hit.path), innerPath: nil, threatName: hit.name,
+                                  engine: "XProtect", level: hit.level))
+                }
+            }
+        }
+
         log(.info, isCancelled ? "Stopped after \(files.formatted()) files" : "Finished: \(files.formatted()) files, \(archivesOpened.formatted()) archives, \(detections.count) threat\(detections.count == 1 ? "" : "s")")
 
         report(force: true, path: "")
@@ -131,6 +155,20 @@ final class ScanEngine {
     }
 
     // MARK: - Walking
+
+    /// Lets `cancel()` stop a helper tool (yara) that's running.
+    private func registerExternal(_ process: LineProcess) {
+        cancelLock.lock(); clamProcess = process; let stop = cancelled; cancelLock.unlock()
+        if stop { process.terminate() }
+    }
+
+    /// Files a USB-drive check looks at when `riskyOnly` is set.
+    static let riskyExtensions: Set<String> = [
+        "app", "pkg", "mpkg", "dmg", "iso", "zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "xz", "xar",
+        "command", "tool", "terminal", "sh", "zsh", "bash", "py", "js", "jar", "scpt", "applescript",
+        "workflow", "action", "dylib", "so", "bundle", "plugin", "kext", "pl", "rb", "php", "docm", "xlsm",
+        "pptm", "doc", "xls", "pdf", "lnk", "exe", "dll", "scr", "bat", "cmd", "ps1", "vbs", "hta", "inetloc", "fileloc",
+    ]
 
     private static func normalize(_ path: String) -> String {
         // Resolve /var → /private/var etc. so exclusions match enumerated paths.
@@ -256,6 +294,13 @@ final class ScanEngine {
     /// The EICAR, hash-list and pattern checks for one file. Safe to call from several threads.
     private func inspect(_ url: URL, size: Int64, outer: URL, inner: String?, container: URL?) -> Detection? {
         guard size > 0 else { return nil }
+        let kind = PatternRules.kind(of: url, size: size)
+        if options.riskyOnly, kind == nil, !ScanEngine.riskyExtensions.contains(url.pathExtension.lowercased()) {
+            return nil
+        }
+        if container == nil, kind != nil, options.useXProtect {
+            candidateLock.lock(); xprotectCandidates.append(url.path); candidateLock.unlock()
+        }
         // EICAR test string (also catches EICAR with trailing whitespace).
         if size <= 256, let data = try? Data(contentsOf: url), Eicar.matches(data) {
             return Detection(fileURL: outer, innerPath: inner, threatName: "EICAR-Test-File",
@@ -305,6 +350,15 @@ final class ScanEngine {
         let nestedBase = container == nil ? nil : inner
         let outcome = archives.open(url, kind: kind) { contents in
             walk(contents, depth: depth + 1, container: outer, extractionRoot: contents, innerBase: nestedBase)
+            // Apple's rules over what was inside, before the scratch copy is cleaned up.
+            if options.useXProtect, XProtectRules.shared.isReady, !isCancelled,
+               !detections.contains(where: { $0.fileURL == outer }) {
+                for hit in XProtectRules.shared.scan(folder: contents.path, register: registerExternal) {
+                    let inside = innerPath(of: URL(fileURLWithPath: hit.path), extractionRoot: contents, innerBase: nestedBase)
+                    add(Detection(fileURL: outer, innerPath: inside, threatName: hit.name, engine: "XProtect", level: hit.level))
+                    break
+                }
+            }
         }
         phase = previousPhase
         if case .skipped(let reason) = outcome {
@@ -345,12 +399,27 @@ final class ScanEngine {
             guard let verdict = Gatekeeper.assess(url), verdict.reason.contains("revoked") else { return }
             add(Detection(fileURL: url, innerPath: nil, threatName: verdict.reason, engine: "Gatekeeper", level: .malicious))
         case .unsigned:
-            // It was signed once (the seal is still there) but the signature doesn't check out.
+            // Only a real "contents don't match the seal" error counts; reading errors, privacy
+            // blocks and never-signed apps don't. Then Apple's own codesign tool has to agree,
+            // so a quirk of the Security framework can never flag a normal app.
             let seal = url.appendingPathComponent("Contents/_CodeSignature/CodeResources").path
-            guard FileManager.default.fileExists(atPath: seal) else { return }
+            guard FileManager.default.fileExists(atPath: seal), identity.looksTampered,
+                  ScanEngine.codesignConfirmsTampering(url) else { return }
             add(Detection(fileURL: url, innerPath: nil, threatName: "App was changed after it was signed",
                           engine: "Agamemnon", level: .suspicious))
         }
+    }
+
+    /// Asks `codesign` (the tool macOS itself trusts) whether the app's seal is broken.
+    static func codesignConfirmsTampering(_ url: URL) -> Bool {
+        let r = Shell.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", url.path], timeout: 120)
+        if r.timedOut { return false }
+        guard r.status != 0 else { return false }
+        let text = r.stderr.lowercased()
+        return text.contains("a sealed resource is missing or invalid")
+            || text.contains("file added") || text.contains("file modified") || text.contains("file missing")
+            || text.contains("invalid signature (code or signature have been modified)")
+            || text.contains("main executable failed strict validation")
     }
 
     private func add(_ detection: Detection) {

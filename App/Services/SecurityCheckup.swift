@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AppKit
+import CoreWLAN
 
 /// A quick check of the macOS settings that matter most for security, each with a button to
 /// the right System Settings page. Read-only: Agamemnon never changes these itself.
@@ -129,6 +130,35 @@ final class SecurityCheckup: ObservableObject {
                                            : "Your Mac is backed up with Time Machine.",
                               state: none ? .warning : .good,
                               settingsURL: "x-apple.systempreferences:com.apple.Time-Machine-Settings.extension"))
+        }
+
+        // Wi-Fi: open and WEP networks let anyone nearby read or change unencrypted traffic.
+        if let wifi = CWWiFiClient.shared().interface(), wifi.powerOn(), wifi.interfaceMode() != .none {
+            let mode = wifi.security()
+            switch mode {
+            case .none:
+                items.append(Item(id: "wifi", title: "Wi-Fi security",
+                                  detail: "You're on an open Wi-Fi network with no password. Anyone nearby can see unencrypted traffic. Use a VPN or another network.",
+                                  state: .bad, settingsURL: "x-apple.systempreferences:com.apple.wifi-settings-extension"))
+            case .WEP, .dynamicWEP:
+                items.append(Item(id: "wifi", title: "Wi-Fi security",
+                                  detail: "This Wi-Fi network uses WEP, which can be broken in minutes. Change the router to WPA2 or WPA3.",
+                                  state: .bad, settingsURL: "x-apple.systempreferences:com.apple.wifi-settings-extension"))
+            case .wpaPersonal, .wpaEnterprise:
+                items.append(Item(id: "wifi", title: "Wi-Fi security",
+                                  detail: "This network uses the original WPA, which has known weaknesses. Switch the router to WPA2 or WPA3.",
+                                  state: .warning, settingsURL: nil))
+            case .wpaPersonalMixed, .wpaEnterpriseMixed:
+                items.append(Item(id: "wifi", title: "Wi-Fi security",
+                                  detail: "Your Mac uses WPA2, but the router is in WPA/WPA2 mixed mode, which still lets older, weaker WPA devices join. Setting the router to WPA2 (or WPA3) only is safer.",
+                                  state: .warning, settingsURL: nil))
+            case .unknown:
+                break
+            default:
+                items.append(Item(id: "wifi", title: "Wi-Fi security",
+                                  detail: "Your Wi-Fi network is encrypted with WPA2 or WPA3.",
+                                  state: .good, settingsURL: nil))
+            }
         }
 
         return items

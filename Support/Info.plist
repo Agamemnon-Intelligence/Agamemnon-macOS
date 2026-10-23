@@ -40,6 +40,42 @@
 	<string>Agamemnon scans removable drives you choose for malware.</string>
 	<key>NSNetworkVolumesUsageDescription</key>
 	<string>Agamemnon scans network folders you choose for malware.</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Scan with Agamemnon</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>scanFiles</string>
+			<key>NSPortName</key>
+			<string>Agamemnon</string>
+			<key>NSRequiredContext</key>
+			<dict/>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Any file or folder (to scan)</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>None</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.item</string>
+				<string>public.folder</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Agamemnon asks for your administrator password only to quarantine threats in protected locations or to turn off encrypted DNS.</string>
 </dict>

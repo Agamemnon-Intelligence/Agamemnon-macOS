@@ -22,6 +22,13 @@ final class AppModel: ObservableObject {
     let browser: BrowserGuard
     let ransomware: RansomwareShield
     let checkup: SecurityCheckup
+    let usb: USBGuard
+    let clipboard: ClipboardGuard
+    let selfProtection: SelfProtection
+    let onAccess: OnAccessScanner
+    let updater: SoftwareUpdater
+    let privacy: PrivacyMonitor
+    let selfUpdater: AgamemnonUpdater
 
     @Published private(set) var clamAVInstalled = false
     @Published private(set) var clamAVReady = false
@@ -30,6 +37,12 @@ final class AppModel: ObservableObject {
     @Published var clamAVMessage: String?
     @Published private(set) var hasFullDiskAccess = true
     @Published private(set) var clamAVInstalling = false
+    @Published private(set) var xprotectReady = false
+    @Published private(set) var yaraInstalled = false
+    @Published private(set) var xprotectVersion: Int?
+    @Published private(set) var xprotectRuleCount = 0
+    @Published private(set) var yaraInstalling = false
+    @Published var yaraMessage: String?
 
     private var bag = Set<AnyCancellable>()
     private var started = false
@@ -49,6 +62,13 @@ final class AppModel: ObservableObject {
         browser = BrowserGuard(vault: vault)
         ransomware = RansomwareShield(vault: vault)
         checkup = SecurityCheckup()
+        usb = USBGuard(vault: vault)
+        clipboard = ClipboardGuard()
+        onAccess = OnAccessScanner(vault: vault)
+        updater = SoftwareUpdater()
+        privacy = PrivacyMonitor()
+        selfUpdater = AgamemnonUpdater()
+        selfProtection = SelfProtection(behavior: behavior, onAccess: onAccess)
 
         // Re-publish child changes so the menu bar icon and overview stay current.
         let children: [AnyPublisher<Void, Never>] = [
@@ -59,6 +79,9 @@ final class AppModel: ObservableObject {
             dns.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             behavior.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             ransomware.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            usb.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            selfProtection.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            selfUpdater.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
         ]
         for publisher in children {
             publisher
@@ -85,9 +108,41 @@ final class AppModel: ObservableObject {
         browser.applyPreference()
         ransomware.applyPreference()
         checkup.run()
+        usb.applyPreference()
+        clipboard.applyPreference()
+        selfProtection.start()
+        updater.start()
+        selfUpdater.start()
+        privacy.applyPreference()
         // Set up ClamAV once, automatically, if it isn't there yet.
         DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
             Task { @MainActor in self?.autoInstallClamAVIfNeeded() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak self] in
+            Task { @MainActor in self?.autoInstallYaraIfNeeded() }
+        }
+    }
+
+    /// Apple's XProtect rules need yara. Installed once, quietly, if Homebrew is there.
+    private func autoInstallYaraIfNeeded() {
+        guard !XProtectRules.shared.isInstalled, Shell.which("brew") != nil,
+              !Prefs.bool(Prefs.yaraAutoInstallTried) else { return }
+        UserDefaults.standard.set(true, forKey: Prefs.yaraAutoInstallTried)
+        installYara()
+    }
+
+    func installYara() {
+        guard !yaraInstalling else { return }
+        yaraInstalling = true
+        yaraMessage = "Installing yara with Homebrew…"
+        Task {
+            let error = await Task.detached(priority: .utility) { XProtectRules.shared.install() }.value
+            self.yaraInstalling = false
+            self.yaraMessage = error
+            if error == nil {
+                ActivityLog.shared.add(.update, "Apple XProtect rules turned on", "yara installed with Homebrew")
+            }
+            self.refreshEnvironment()
         }
     }
 
@@ -143,6 +198,9 @@ final class AppModel: ObservableObject {
         startupSweep.applyPreference()
         browser.applyPreference()
         ransomware.applyPreference()
+        usb.applyPreference()
+        clipboard.applyPreference()
+        privacy.applyPreference()
     }
 
     func refreshEnvironment() {
@@ -152,6 +210,14 @@ final class AppModel: ObservableObject {
                 let fda = AppModel.checkFullDiskAccess()
                 return (clam.isInstalled, clam.isReady, clam.isInstalled ? clam.version : nil, fda)
             }.value
+            let xp = await Task.detached(priority: .utility) { () -> (Bool, Bool, Int?, Int) in
+                let rules = XProtectRules.shared
+                return (rules.isInstalled, rules.isReady, rules.rulesVersion, rules.ruleCount)
+            }.value
+            self.yaraInstalled = xp.0
+            self.xprotectReady = xp.1
+            self.xprotectVersion = xp.2
+            self.xprotectRuleCount = xp.3
             self.clamAVInstalled = info.0
             self.clamAVReady = info.1
             self.clamAVVersion = info.2

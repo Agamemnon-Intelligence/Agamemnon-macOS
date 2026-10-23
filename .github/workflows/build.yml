@@ -82,6 +82,15 @@ jobs:
         run: |
           set -euo pipefail
           APP="build/dd/Build/Products/Release/Agamemnon.app"
+          HELPER="$APP/Contents/MacOS/AgamemnonHelper"
+          # The embedded protection helper is signed first, with the same identity.
+          if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
+            codesign --force --options runtime --timestamp \
+              --identifier com.mirazbakis.Agamemnon.Helper --sign "$IDENTITY" "$HELPER"
+          else
+            codesign --force --options runtime \
+              --identifier com.mirazbakis.Agamemnon.Helper --sign - "$HELPER"
+          fi
           if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
             codesign --force --options runtime --timestamp \
               --entitlements Support/Agamemnon.entitlements \
